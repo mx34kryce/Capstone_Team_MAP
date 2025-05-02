@@ -13,6 +13,8 @@ DEFAULT_COLORS = [
     '#1E90FF', '#DA70D6', '#FF69B4', '#FF1493', '#DC143C', '#A52A2A',
 ]
 
+
+
 def get_color(category_id):
     """카테고리 ID에 따라 색상을 반환합니다."""
     idx = category_id % len(DEFAULT_COLORS)
@@ -174,3 +176,4 @@ if __name__ == '__main__':
     # 임시 이미지 파일 삭제
     if os.path.exists("temp_test_image.jpg"):
         os.remove("temp_test_image.jpg")
+
