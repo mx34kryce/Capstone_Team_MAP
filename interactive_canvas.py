@@ -1,6 +1,7 @@
 # interactive_canvas.py
 import tkinter as tk
 from PIL import Image, ImageTk
+import os
 
 # visualizer 모듈의 색상 함수 재사용 또는 여기서 정의
 DEFAULT_COLORS = [
@@ -14,6 +15,8 @@ def get_color(category_id):
 class InteractiveCanvas(tk.Canvas):
     def __init__(self, master, **kwargs):
         super().__init__(master, **kwargs)
+        self.scale = 1.0             # 현재 확대 비율
+        self.pil_image = None        # 원본 PIL.Image
         self.image_on_canvas = None
         self.tk_image = None
         self.annotations = [] # 현재 표시/수정 중인 annotation 리스트 (예측만 해당될 수 있음)
@@ -29,6 +32,10 @@ class InteractiveCanvas(tk.Canvas):
         self.bind("<ButtonPress-1>", self.on_button_press)
         self.bind("<B1-Motion>", self.on_move_press)
         self.bind("<ButtonRelease-1>", self.on_button_release)
+        self.bind("<MouseWheel>", self.on_mousewheel)
+        # Linux 바인딩(마우스 휠휠)
+        self.bind("<Button-4>",  self.on_mousewheel)
+        self.bind("<Button-5>",  self.on_mousewheel)
 
         # 콜백 함수 (annotation 변경 시 호출)
         self.annotation_update_callback = None
@@ -37,20 +44,14 @@ class InteractiveCanvas(tk.Canvas):
         self.annotation_update_callback = callback
 
     def load_image(self, image_path):
+        """이미지를 로드하고 스케일·어노테이션을 초기화합니다."""
         try:
-            pil_image = Image.open(image_path).convert("RGB")
-            # Canvas 크기에 맞게 이미지 리사이즈 (선택 사항)
-            # pil_image = pil_image.resize((self.winfo_width(), self.winfo_height()), Image.Resampling.LANCZOS)
-
-            self.tk_image = ImageTk.PhotoImage(pil_image)
-            if self.image_on_canvas:
-                self.delete(self.image_on_canvas)
-            self.image_on_canvas = self.create_image(0, 0, anchor="nw", image=self.tk_image)
-            # 이미지가 로드되면 기존 annotation 삭제
+            self.pil_image = Image.open(image_path).convert("RGB")
+            self.scale = 1.0
+            self._update_image()
             self.clear_annotations()
         except Exception as e:
             print(f"오류: 이미지 로드 실패 - {e}")
-            # 오류 처리 (예: 빈 캔버스 표시)
             self.delete("all")
             self.tk_image = None
             self.image_on_canvas = None
@@ -89,6 +90,17 @@ class InteractiveCanvas(tk.Canvas):
                 self.create_rectangle(xmin - handle_size/2, ymax - handle_size/2, xmin + handle_size/2, ymax + handle_size/2, fill=color, outline='black', tags=("annotation", f"ann_{idx}", "resize_bl"))
                 self.create_rectangle(xmax - handle_size/2, ymax - handle_size/2, xmax + handle_size/2, ymax + handle_size/2, fill=color, outline='black', tags=("annotation", f"ann_{idx}", "resize_br"))
 
+    def _update_image(self):
+        # 리사이즈된 이미지를 PhotoImage 로 변환
+        w, h = self.pil_image.size
+        sw, sh = int(w * self.scale), int(h * self.scale)
+        resized = self.pil_image.resize((sw, sh), Image.Resampling.LANCZOS)
+        self.tk_image = ImageTk.PhotoImage(resized)
+        if self.image_on_canvas:
+            self.delete(self.image_on_canvas)
+        self.image_on_canvas = self.create_image(0, 0, anchor="nw", image=self.tk_image)
+        # 축소·확대 후 annotation 재그리기
+        self.redraw_annotations()
 
     def clear_annotations(self):
         self.delete("annotation")
@@ -206,6 +218,42 @@ class InteractiveCanvas(tk.Canvas):
 
         # 최종 상태로 다시 그리기 (필요시)
         self.redraw_annotations()
+        
+    def on_mousewheel(self, event):
+        # Windows: event.delta, Linux: event.num
+        factor = 1.0
+        if hasattr(event, 'delta'):
+            factor = 1.0 + (event.delta / 1200)   # 10% 단위로 조절
+        elif event.num == 4:
+            factor = 1.1
+        elif event.num == 5:
+            factor = 0.9
+        # 스케일 범위 제한
+        new_scale = min(max(self.scale * factor, 0.2), 5.0)
+        if abs(new_scale - self.scale) < 1e-3:
+            return
+        self.scale = new_scale
+        self._update_image()
+    
+    def redraw_annotations(self):
+        self.delete("annotation")
+        for idx, ann in enumerate(self.annotations):
+            if ann['score'] < self.confidence_threshold: continue
+            xmin, ymin, w, h = ann['bbox']
+            # 스케일 적용
+            xmin, ymin, w, h = xmin*self.scale, ymin*self.scale, w*self.scale, h*self.scale
+            xmax, ymax = xmin + w, ymin + h
+            color = get_color(ann['category_id'])
+            self.create_rectangle(xmin, ymin, xmax, ymax,
+                                  outline=color, width=2,
+                                  tags=("annotation", f"ann_{idx}", "bbox"))
+            self.create_text(xmin+2, ymin+2,
+                             text=f"{self.categories[ann['category_id']]['name']} ({ann['score']:.2f})",
+                             fill=color,
+                             anchor="nw",
+                             tags=("annotation", f"ann_{idx}", "label"))
+            # … resize 핸들 등도 동일하게 스케일 적용 …
+
 
 
 # 예시 사용법 (테스트용)
