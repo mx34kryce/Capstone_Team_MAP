@@ -2,3 +2,4 @@ annotations
 val2017
 faster_rcnn_predictions.json
 val2017.zip
+__pycache__
