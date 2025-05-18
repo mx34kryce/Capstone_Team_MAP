@@ -1,6 +1,6 @@
 # interactive_canvas.py
 import tkinter as tk
-from PIL import Image, ImageTk
+from PIL import Image, ImageTk, ImageDraw # ImageDraw 추가
 import math
 import os
 
@@ -13,7 +13,7 @@ DEFAULT_COLORS = [
     '#FFA500', '#FFD700', '#ADFF2F', '#7FFF00', '#00FA9A', '#00CED1',
     '#1E90FF', '#DA70D6', '#FF69B4', '#FF1493', '#DC143C', '#A52A2A',
 ]
-GT_COLOR_OFFSET = 5 # GT 색상을 예측과 다르게 하기 위한 오프셋 (선택적)
+GT_COLOR_OFFSET = 0 # GT 색상을 예측과 동일하게 설정
 
 def get_color(category_id, is_gt=False):
     """카테고리 ID에 따라 색상을 반환합니다. GT 여부에 따라 오프셋 적용 가능."""
@@ -302,7 +302,7 @@ class InteractiveCanvas(tk.Canvas):
 
             bbox = ann['bbox'] # 원본 이미지 좌표계 [xmin, ymin, w, h]
             label = self.categories.get(cat_id, {}).get('name', f'ID:{cat_id}')
-            color = get_color(cat_id, is_gt=True)
+            color = get_color(cat_id, is_gt=True) # is_gt는 이제 색상 자체를 바꾸지 않음
 
             xmin_img, ymin_img, w_img, h_img = bbox
             if w_img < min_bbox_size or h_img < min_bbox_size: continue
@@ -313,7 +313,10 @@ class InteractiveCanvas(tk.Canvas):
             xmax_c, ymax_c = self._image_to_canvas_coords(xmax_img, ymax_img)
 
             gt_tag = f"gt_idx_{idx}"
-            rect_id = self.create_rectangle(xmin_c, ymin_c, xmax_c, ymax_c, outline=color, width=2, tags=("annotation", "gt", gt_tag, "bbox"))
+            # GT 박스 내부를 stipple로 채워 투명도 효과 부여
+            rect_id = self.create_rectangle(xmin_c, ymin_c, xmax_c, ymax_c, 
+                                            outline=color, width=2, fill=color, stipple="gray50", 
+                                            tags=("annotation", "gt", gt_tag, "bbox"))
             text_content = f"GT: {label}"
             # 텍스트 위치도 변환된 좌표 사용
             self.create_text(xmin_c + 2, ymin_c + 2, anchor="nw", text=text_content, fill=color, font=("Arial", 8), tags=("annotation", "gt", gt_tag, "label"))
@@ -337,6 +340,7 @@ class InteractiveCanvas(tk.Canvas):
             xmax_c, ymax_c = self._image_to_canvas_coords(xmax_img, ymax_img)
 
             pred_tag = f"pred_idx_{idx}"
+            # 예측 박스는 내부를 채우지 않음 (기존과 동일)
             rect_id = self.create_rectangle(xmin_c, ymin_c, xmax_c, ymax_c, outline=color, width=2, dash=(4, 2), tags=("annotation", "pred", pred_tag, "bbox"))
             text_content = f"{label} ({score:.2f})"
             # 텍스트 위치 계산 (캔버스 좌표 기준)

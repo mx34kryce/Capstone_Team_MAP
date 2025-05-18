@@ -41,6 +41,11 @@ class AnnotatorGUI:
         self.current_pr_rec = None
         self.selected_pr_class_id = None
 
+        # 이미지 메타데이터 및 정렬 관련 변수
+        self.image_metadata = {}  # 이미지 ID를 키로, 메타데이터 딕셔너리를 값으로 가짐
+        self.sort_column = "filename"  # 초기 정렬 컬럼 (Treeview 컬럼 ID 기준)
+        self.sort_order_asc = True  # True: 오름차순, False: 내림차순
+
         # UI 요소 생성
         self._create_widgets()
 
@@ -79,16 +84,33 @@ class AnnotatorGUI:
         left_frame = ttk.Frame(main_frame, padding="5")
         left_frame.grid(row=0, column=0, sticky="ns")
 
-        # 이미지 목록
+        # 이미지 목록 (Treeview로 변경)
         ttk.Label(left_frame, text="Images:").pack(anchor="w")
-        img_list_frame = ttk.Frame(left_frame)
-        img_list_frame.pack(fill="x", expand=False, pady=(0, 10))
-        self.img_listbox = tk.Listbox(img_list_frame, width=30, height=20, exportselection=False)
-        self.img_listbox.pack(side=tk.LEFT, fill="x", expand=True)
-        scrollbar = ttk.Scrollbar(img_list_frame, orient="vertical", command=self.img_listbox.yview)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        self.img_listbox.config(yscrollcommand=scrollbar.set)
-        self.img_listbox.bind('<<ListboxSelect>>', self.on_image_select)
+        img_tree_frame = ttk.Frame(left_frame)
+        img_tree_frame.pack(fill="both", expand=True, pady=(0, 10))  # expand=True로 변경
+
+        self.image_treeview = ttk.Treeview(img_tree_frame,
+                                           columns=("filename", "ap", "classes", "instances"),
+                                           show="headings", selectmode=tk.BROWSE, height=15)  # exportselection -> selectmode, 값은 tk.BROWSE 또는 tk.EXTENDED 등
+        self.image_treeview.heading("filename", text="File Name", command=lambda: self._sort_treeview_column("filename"))
+        self.image_treeview.heading("ap", text="AP Score", command=lambda: self._sort_treeview_column("ap"))
+        self.image_treeview.heading("classes", text="Classes", command=lambda: self._sort_treeview_column("classes"))
+        self.image_treeview.heading("instances", text="Instances", command=lambda: self._sort_treeview_column("instances"))
+
+        self.image_treeview.column("filename", width=150, anchor="w")
+        self.image_treeview.column("ap", width=70, anchor="e")
+        self.image_treeview.column("classes", width=60, anchor="e")
+        self.image_treeview.column("instances", width=70, anchor="e")
+
+        tree_scrollbar_y = ttk.Scrollbar(img_tree_frame, orient="vertical", command=self.image_treeview.yview)
+        tree_scrollbar_x = ttk.Scrollbar(img_tree_frame, orient="horizontal", command=self.image_treeview.xview)
+        self.image_treeview.configure(yscrollcommand=tree_scrollbar_y.set, xscrollcommand=tree_scrollbar_x.set)
+
+        tree_scrollbar_y.pack(side=tk.RIGHT, fill=tk.Y)
+        tree_scrollbar_x.pack(side=tk.BOTTOM, fill=tk.X)
+        self.image_treeview.pack(side=tk.LEFT, fill="both", expand=True)
+
+        self.image_treeview.bind('<<TreeviewSelect>>', self.on_image_select)
 
         # 클래스 가시성
         visibility_frame = ttk.LabelFrame(left_frame, text="Class Visibility", padding="5")
@@ -226,9 +248,8 @@ class AnnotatorGUI:
         gt_loaded = self.gt_images is not None and self.categories is not None
         pred_loaded = self.pred_annotations_all is not None
         img_dir_set = bool(self.image_dir)
-        img_selected = self.current_image_id is not None
-
-        self.img_listbox.config(state=tk.NORMAL if gt_loaded else tk.DISABLED)
+        selected_items = self.image_treeview.selection()
+        img_selected = bool(selected_items) and self.current_image_id is not None
 
         can_calculate_map = gt_loaded and pred_loaded and img_dir_set and img_selected
         self.conf_slider.config(state=tk.NORMAL if can_calculate_map else tk.DISABLED)
@@ -260,14 +281,9 @@ class AnnotatorGUI:
         self.update_status("Processing GT data...", 50)
 
         if self.gt_images and self.categories:
-            self.img_listbox.delete(0, tk.END)
-            self.image_id_map = {}
-            sorted_img_ids = sorted(self.gt_images.keys(), key=lambda img_id: self.gt_images[img_id].get('file_name', str(img_id)))
-
-            for i, img_id in enumerate(sorted_img_ids):
-                filename = self.gt_images[img_id].get('file_name', f'Image ID: {img_id}')
-                self.img_listbox.insert(tk.END, filename)
-                self.image_id_map[i] = img_id
+            if self.pred_annotations_all:  # 예측도 로드된 경우에만 메타데이터 계산
+                self._calculate_all_images_metadata()
+            self._populate_image_treeview()
 
             self._populate_class_checkboxes()
             self._update_pr_class_selector()
@@ -324,6 +340,11 @@ class AnnotatorGUI:
         if self.pred_annotations_all is not None:
             messagebox.showinfo("Success", f"Loaded predictions for {len(self.pred_annotations_all)} images.")
             self.update_status(f"Predictions loaded for {len(self.pred_annotations_all)} images.", 100)
+
+            if self.gt_images:  # GT도 로드된 경우 메타데이터 계산 및 Treeview 업데이트
+                self._calculate_all_images_metadata()
+                self._populate_image_treeview()
+
             if self.current_image_id:
                 self.load_annotations_for_current_image()
                 self.update_visualization_and_map()
@@ -344,30 +365,46 @@ class AnnotatorGUI:
         self._update_ui_state()
 
     def on_image_select(self, event):
-        selected_indices = self.img_listbox.curselection()
-        if not selected_indices:
+        selected_items = self.image_treeview.selection()
+        if not selected_items:
             return
-        selected_index = selected_indices[0]
+        selected_item = selected_items[0]
 
-        if selected_index in self.image_id_map:
-            new_image_id = self.image_id_map[selected_index]
-            if new_image_id == self.current_image_id:
+        try:
+            new_image_id = int(selected_item)  # Treeview 아이템 ID가 이미지 ID라고 가정
+        except ValueError:
+            item_values = self.image_treeview.item(selected_item, 'values')
+            if not item_values:
                 return
-
-            self.current_image_id = new_image_id
-            print(f"Selected Image ID: {self.current_image_id}")
-            if not self.image_dir:
-                messagebox.showwarning("Warning", "Please select the image directory first.")
-                self.img_listbox.selection_clear(0, tk.END)
-                self.current_image_id = None
-                self.update_status("Select image directory first.", 0)
+            filename_to_find = item_values[0]
+            found_id = None
+            for img_id, img_info in self.gt_images.items():
+                if img_info.get('file_name') == filename_to_find:
+                    found_id = img_id
+                    break
+            if found_id is None:
+                print(f"Error: Could not find image ID for filename {filename_to_find}")
                 return
+            new_image_id = found_id
 
-            self.update_status(f"Loading image ID: {self.current_image_id}...", 0)
-            self.load_image_and_annotations(self.current_image_id)
-            self.update_status(f"Image ID: {self.current_image_id} loaded.", 100)
-            self._update_pr_class_selector()
-            self.update_visualization_and_map()
+        if new_image_id == self.current_image_id:
+            return
+
+        self.current_image_id = new_image_id
+        print(f"Selected Image ID: {self.current_image_id}")
+        if not self.image_dir:
+            messagebox.showwarning("Warning", "Please select the image directory first.")
+            if selected_item:
+                self.image_treeview.selection_remove(selected_item)
+            self.current_image_id = None
+            self.update_status("Select image directory first.", 0)
+            return
+
+        self.update_status(f"Loading image ID: {self.current_image_id}...", 0)
+        self.load_image_and_annotations(self.current_image_id)
+        self.update_status(f"Image ID: {self.current_image_id} loaded.", 100)
+        self._update_pr_class_selector()
+        self.update_visualization_and_map()
         self._update_ui_state()
 
     def load_image_and_annotations(self, image_id):
@@ -646,6 +683,128 @@ class AnnotatorGUI:
         except Exception as e:
             messagebox.showerror("Error", f"Failed to save annotations: {e}")
             self.update_status(f"Error saving annotations: {e}", 0)
+
+    def _calculate_image_metadata(self, image_id):
+        """단일 이미지에 대한 메타데이터를 계산합니다."""
+        if not self.gt_images or image_id not in self.gt_images:
+            return None
+
+        gt_anns_img = self.gt_annotations.get(image_id, [])
+        pred_anns_img = self.pred_annotations_all.get(image_id, []) if self.pred_annotations_all else []
+        categories_img = self.categories
+        iou_thresh = self.iou_slider.get()
+
+        filename = self.gt_images[image_id].get('file_name', f'Image ID: {image_id}')
+        instance_count = len(gt_anns_img)
+        class_count = len(set(ann['category_id'] for ann in gt_anns_img))
+
+        ap_score = 0.0
+        if gt_anns_img and pred_anns_img and categories_img:
+            conf_thresh = self.conf_slider.get()
+            filtered_preds = [p for p in pred_anns_img if p['score'] >= conf_thresh]
+            if filtered_preds:
+                mean_ap, _ = map_calculator.calculate_map(gt_anns_img, filtered_preds, categories_img, iou_thresh)
+                ap_score = mean_ap
+            elif not gt_anns_img:
+                ap_score = 0.0
+        elif not gt_anns_img:
+            ap_score = 0.0
+
+        return {
+            "filename": filename,
+            "ap": ap_score,
+            "classes": class_count,
+            "instances": instance_count
+        }
+
+    def _calculate_all_images_metadata(self):
+        """모든 이미지에 대한 메타데이터를 계산하여 self.image_metadata에 저장합니다."""
+        self.image_metadata.clear()
+        if not self.gt_images or not self.pred_annotations_all or not self.categories:
+            if self.gt_images:
+                for img_id in self.gt_images.keys():
+                    gt_anns_img = self.gt_annotations.get(img_id, [])
+                    self.image_metadata[img_id] = {
+                        "filename": self.gt_images[img_id].get('file_name', f'Image ID: {img_id}'),
+                        "ap": "N/A",
+                        "classes": len(set(ann['category_id'] for ann in gt_anns_img)),
+                        "instances": len(gt_anns_img)
+                    }
+            return
+
+        self.update_status("Calculating metadata for all images...", 0)
+        total_images = len(self.gt_images)
+        for i, img_id in enumerate(self.gt_images.keys()):
+            metadata = self._calculate_image_metadata(img_id)
+            if metadata:
+                self.image_metadata[img_id] = metadata
+            if (i + 1) % 10 == 0 or (i + 1) == total_images:
+                self.update_status(f"Calculating metadata... {i+1}/{total_images}", int((i+1)/total_images*100))
+        self.update_status("Metadata calculation complete.", 100)
+
+    def _populate_image_treeview(self):
+        """self.image_metadata를 사용하여 Treeview를 채웁니다."""
+        for item in self.image_treeview.get_children():
+            self.image_treeview.delete(item)
+
+        if not self.image_metadata and self.gt_images:
+            temp_metadata = {}
+            for img_id, img_info in self.gt_images.items():
+                gt_anns_img = self.gt_annotations.get(img_id, [])
+                temp_metadata[img_id] = {
+                    "filename": img_info.get('file_name', f'Image ID: {img_id}'),
+                    "ap": "N/A",
+                    "classes": len(set(ann['category_id'] for ann in gt_anns_img)),
+                    "instances": len(gt_anns_img)
+                }
+            data_to_display = list(temp_metadata.items())
+        elif not self.image_metadata:
+            return
+        else:
+            data_to_display = list(self.image_metadata.items())
+
+        key_map = {"File Name": "filename", "AP Score": "ap", "Classes": "classes", "Instances": "instances"}
+        sort_key_actual = key_map.get(self.sort_column, "filename")
+
+        def get_sort_value(item):
+            value = item[1].get(sort_key_actual)
+            if value == "N/A":
+                return -float('inf') if self.sort_order_asc else float('inf')
+            if isinstance(value, (int, float)):
+                return value
+            return str(value).lower()
+
+        try:
+            sorted_data = sorted(data_to_display, key=get_sort_value, reverse=not self.sort_order_asc)
+        except TypeError as e:
+            print(f"Sorting error: {e}. Data may contain mixed types for column {self.sort_column}.")
+            sorted_data = data_to_display
+
+        for img_id, meta in sorted_data:
+            ap_display = f"{meta['ap']:.4f}" if isinstance(meta['ap'], float) else meta['ap']
+            self.image_treeview.insert("", tk.END, id=str(img_id),
+                                       values=(meta["filename"], ap_display, meta["classes"], meta["instances"]))
+
+    def _sort_treeview_column(self, column_id):  # column_name 대신 column_id (Treeview 컬럼 식별자) 사용
+        """Treeview 컬럼 헤더 클릭 시 정렬 수행"""
+        if self.sort_column == column_id:
+            self.sort_order_asc = not self.sort_order_asc
+        else:
+            self.sort_column = column_id
+            self.sort_order_asc = True  # 기본 오름차순
+
+        # 헤더에 정렬 방향 표시
+        for col_id_iter in self.image_treeview["columns"]:
+            current_text = self.image_treeview.heading(col_id_iter, "text")
+            # 기존 화살표 제거 (정규식 사용이 더 안전할 수 있음)
+            current_text = current_text.replace(' ▲', '').replace(' ▼', '')
+            if col_id_iter == self.sort_column:
+                arrow = ' ▲' if self.sort_order_asc else ' ▼'
+                self.image_treeview.heading(col_id_iter, text=current_text + arrow)
+            else:
+                self.image_treeview.heading(col_id_iter, text=current_text)
+
+        self._populate_image_treeview()
 
 
 if __name__ == '__main__':
