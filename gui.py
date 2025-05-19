@@ -66,6 +66,11 @@ class AnnotatorGUI:
         btn_load_img_dir = ttk.Button(top_frame, text="Select Image Directory", command=self.select_image_dir)
         btn_load_img_dir.pack(side=tk.LEFT, padx=5)
 
+        # 전체 map계산 버튼
+        self.calc_dataset_map_btn = ttk.Button(top_frame, text="Calculate Dataset mAP", command=self.calculate_dataset_map, 
+                                               state=tk.DISABLED)
+        self.calc_dataset_map_btn.pack(side=tk.LEFT, padx=5)
+
         # --- Bottom Frame ---
         bottom_frame = ttk.Frame(self.master, padding="5 0 5 5")
         bottom_frame.pack(side=tk.BOTTOM, fill=tk.X)
@@ -170,6 +175,10 @@ class AnnotatorGUI:
         self.map_label = ttk.Label(right_frame, text="Current Image AP: N/A", font=("Arial", 10))
         self.map_label.pack(anchor="w", pady=5)
 
+        # --- Dataset mAP Label ---
+        self.dataset_map_label = ttk.Label(right_frame, text="Dataset mAP: N/A", font=("Arial", 10))
+        self.dataset_map_label.pack(anchor="w", pady=(2, 10))
+
         # Class AP Display
         class_ap_frame = ttk.LabelFrame(right_frame, text="Class APs", padding="5")
         class_ap_frame.pack(fill=tk.X, pady=5)
@@ -267,6 +276,12 @@ class AnnotatorGUI:
 
         can_plot_pr = self.current_image_id is not None and self.categories is not None and self.current_pred_anns is not None
         self.pr_class_combobox.config(state=tk.NORMAL if can_plot_pr else tk.DISABLED)
+
+        #dataset-map계산 버튼 로직
+        can_calc_dataset = self.gt_images is not None and self.pred_annotations_all is not None
+        self.calc_dataset_map_btn.config(state=tk.NORMAL if can_calc_dataset else tk.DISABLED)
+
+
 
     def load_gt_data(self):
         filepath = filedialog.askopenfilename(
@@ -805,6 +820,38 @@ class AnnotatorGUI:
                 self.image_treeview.heading(col_id_iter, text=current_text)
 
         self._populate_image_treeview()
+
+    def calculate_dataset_map(self):
+        #전체 이미지에 대해 mAP를 계산하여 다이얼로그로 보여줌.
+        import copy
+        from tkinter import messagebox
+        # 현재 설정된 임계값
+        conf_thresh = self.conf_slider.get()
+        iou_thresh = self.iou_slider.get()
+
+        # 모든 GT, Preds 리스트로 병합
+        all_gt = []
+        for anns in self.gt_annotations.values():
+            all_gt.extend(anns)
+        all_pred = []
+        for preds in self.pred_annotations_all.values():
+            for p in preds:
+                if p['score'] >= conf_thresh:
+                    all_pred.append(copy.deepcopy(p))
+
+        # mAP 계산 (map_calculator.calculate_map 을 사용)
+        mean_ap, _ = map_calculator.calculate_map(
+            all_gt, all_pred, self.categories, iou_threshold=iou_thresh
+        )
+
+        # 결과 표시
+        self.dataset_map_label.config(
+            text=f"Dataset mAP (IoU={iou_thresh:.2f}), (Conf={conf_thresh:.2f}): {mean_ap:.4f}"
+        )
+        messagebox.showinfo(
+            "Dataset mAP",
+            f"Dataset mAP (IoU={iou_thresh:.2f}), (Conf={conf_thresh:.2f}): {mean_ap:.4f}"
+        )
 
 
 if __name__ == '__main__':
