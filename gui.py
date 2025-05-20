@@ -120,9 +120,13 @@ class AnnotatorGUI:
         # 클래스 가시성
         visibility_frame = ttk.LabelFrame(left_frame, text="Class Visibility", padding="5")
         visibility_frame.pack(fill="both", expand=True, pady=5)
-        vis_canvas = tk.Canvas(visibility_frame, borderwidth=0, background="#ffffff")
-        self.class_checkbox_frame = ttk.Frame(vis_canvas, padding="2")
-        vis_scrollbar = ttk.Scrollbar(visibility_frame, orient="vertical", command=vis_canvas.yview)
+
+        # 현재 테마의 TFrame 배경색을 가져옵니다.
+        frame_bg_color = style.lookup('TFrame', 'background')
+
+        vis_canvas = tk.Canvas(visibility_frame, borderwidth=0, background=frame_bg_color, highlightthickness=0)
+        self.class_checkbox_frame = ttk.Frame(vis_canvas, padding="2") # ttk.Frame은 기본적으로 테마의 배경색을 따릅니다.
+        vis_scrollbar = ttk.Scrollbar(visibility_frame, orient="vertical", command=vis_canvas.yview)        
         vis_canvas.configure(yscrollcommand=vis_scrollbar.set)
 
         vis_scrollbar.pack(side="right", fill="y")
@@ -310,7 +314,7 @@ class AnnotatorGUI:
             self.update_status("Error loading GT.", 0)
         self._update_ui_state()
 
-    def _populate_class_checkboxes(self):
+    def _populate_class_checkboxes(self, filter_ids=None):
         for widget in self.class_checkbox_frame.winfo_children():
             widget.destroy()
         self.class_visibility.clear()
@@ -318,7 +322,11 @@ class AnnotatorGUI:
         if not self.categories:
             return
 
-        sorted_categories = sorted(self.categories.items(), key=lambda item: item[1]['name'])
+        # filter_ids가 있으면 해당 ID만, 없으면 전체
+        sorted_categories = sorted(
+            (item for item in self.categories.items()
+            if filter_ids is None or item[0] in filter_ids),
+            key=lambda item: item[1]['name'])
 
         for cat_id, category in sorted_categories:
             var = tk.BooleanVar(value=True)
@@ -418,6 +426,12 @@ class AnnotatorGUI:
         self.update_status(f"Loading image ID: {self.current_image_id}...", 0)
         self.load_image_and_annotations(self.current_image_id)
         self.update_status(f"Image ID: {self.current_image_id} loaded.", 100)
+        # 선택된 이미지에 등장하는 클래스만 필터링하여 체크박스 업데이트
+        gt_ids   = {ann['category_id'] for ann in self.current_gt_anns}
+        pred_ids = {ann['category_id'] for ann in self.current_pred_anns}
+        image_class_ids = gt_ids.union(pred_ids)
+        
+        self._populate_class_checkboxes(filter_ids=image_class_ids)
         self._update_pr_class_selector()
         self.update_visualization_and_map()
         self._update_ui_state()
