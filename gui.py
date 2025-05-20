@@ -120,9 +120,13 @@ class AnnotatorGUI:
         # 클래스 가시성
         visibility_frame = ttk.LabelFrame(left_frame, text="Class Visibility", padding="5")
         visibility_frame.pack(fill="both", expand=True, pady=5)
-        vis_canvas = tk.Canvas(visibility_frame, borderwidth=0, background="#ffffff")
-        self.class_checkbox_frame = ttk.Frame(vis_canvas, padding="2")
-        vis_scrollbar = ttk.Scrollbar(visibility_frame, orient="vertical", command=vis_canvas.yview)
+
+        # 현재 테마의 TFrame 배경색을 가져옵니다.
+        frame_bg_color = style.lookup('TFrame', 'background')
+
+        vis_canvas = tk.Canvas(visibility_frame, borderwidth=0, background=frame_bg_color, highlightthickness=0)
+        self.class_checkbox_frame = ttk.Frame(vis_canvas, padding="2") # ttk.Frame은 기본적으로 테마의 배경색을 따릅니다.
+        vis_scrollbar = ttk.Scrollbar(visibility_frame, orient="vertical", command=vis_canvas.yview)        
         vis_canvas.configure(yscrollcommand=vis_scrollbar.set)
 
         vis_scrollbar.pack(side="right", fill="y")
