@@ -310,7 +310,7 @@ class AnnotatorGUI:
             self.update_status("Error loading GT.", 0)
         self._update_ui_state()
 
-    def _populate_class_checkboxes(self):
+    def _populate_class_checkboxes(self, filter_ids=None):
         for widget in self.class_checkbox_frame.winfo_children():
             widget.destroy()
         self.class_visibility.clear()
@@ -318,7 +318,11 @@ class AnnotatorGUI:
         if not self.categories:
             return
 
-        sorted_categories = sorted(self.categories.items(), key=lambda item: item[1]['name'])
+        # filter_ids가 있으면 해당 ID만, 없으면 전체
+        sorted_categories = sorted(
+            (item for item in self.categories.items()
+            if filter_ids is None or item[0] in filter_ids),
+            key=lambda item: item[1]['name'])
 
         for cat_id, category in sorted_categories:
             var = tk.BooleanVar(value=True)
@@ -418,6 +422,12 @@ class AnnotatorGUI:
         self.update_status(f"Loading image ID: {self.current_image_id}...", 0)
         self.load_image_and_annotations(self.current_image_id)
         self.update_status(f"Image ID: {self.current_image_id} loaded.", 100)
+        # 선택된 이미지에 등장하는 클래스만 필터링하여 체크박스 업데이트
+        gt_ids   = {ann['category_id'] for ann in self.current_gt_anns}
+        pred_ids = {ann['category_id'] for ann in self.current_pred_anns}
+        image_class_ids = gt_ids.union(pred_ids)
+        
+        self._populate_class_checkboxes(filter_ids=image_class_ids)
         self._update_pr_class_selector()
         self.update_visualization_and_map()
         self._update_ui_state()
