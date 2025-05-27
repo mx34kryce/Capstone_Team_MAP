@@ -41,6 +41,7 @@ class AnnotatorGUI:
         self.current_pr_prec = None
         self.current_pr_rec = None
         self.selected_pr_class_id = None
+        self._copy = copy
 
         # 이미지 메타데이터 및 정렬 관련 변수
         self.image_metadata = {}  # 이미지 ID를 키로, 메타데이터 딕셔너리를 값으로 가짐
@@ -67,10 +68,18 @@ class AnnotatorGUI:
         btn_load_img_dir = ttk.Button(top_frame, text="Select Image Directory", command=self.select_image_dir)
         btn_load_img_dir.pack(side=tk.LEFT, padx=5)
 
+        btn_reset = ttk.Button(top_frame, text="Reset Annotations", command=self.reset_annotations, state=tk.DISABLED)
+        btn_reset.pack(side=tk.LEFT, padx=5)
+        self.reset_btn = btn_reset
+
         # 전체 map계산 버튼
         self.calc_dataset_map_btn = ttk.Button(top_frame, text="Calculate Dataset mAP", command=self.calculate_dataset_map, 
                                                state=tk.DISABLED)
         self.calc_dataset_map_btn.pack(side=tk.LEFT, padx=5)
+
+        btn_reset = ttk.Button(top_frame, text="Reset Annotations", command=self.reset_annotations, state=tk.DISABLED)
+        btn_reset.pack(side=tk.LEFT, padx=5)
+        self.reset_btn = btn_reset
 
         # --- Bottom Frame ---
         bottom_frame = ttk.Frame(self.master, padding="5 0 5 5")
@@ -286,7 +295,8 @@ class AnnotatorGUI:
         can_calc_dataset = self.gt_images is not None and self.pred_annotations_all is not None
         self.calc_dataset_map_btn.config(state=tk.NORMAL if can_calc_dataset else tk.DISABLED)
 
-
+        can_reset = (self.current_image_id is not None and self.pred_annotations_all is not None)
+        self.reset_btn.config(state=tk.NORMAL if can_reset else tk.DISABLED)
 
     def load_gt_data(self):
         filepath = filedialog.askopenfilename(
@@ -921,6 +931,16 @@ class AnnotatorGUI:
             "Dataset mAP",
             f"Dataset mAP (IoU={iou_thresh:.2f}), (Conf={conf_thresh:.2f}): {mean_ap:.4f}"
         )
+
+    def reset_annotations(self):
+        """현재 선택한 이미지에 대해, 편집 전(로드 직후) 상태로 되돌립니다."""
+        if not self.current_image_id:
+            return
+        # predictions를 다시 로드
+        self.load_annotations_for_current_image()
+        # 화면 갱신
+        self.update_visualization_and_map()
+        self.update_status("Annotations have been reset.", 100)
 
 
 if __name__ == '__main__':
