@@ -68,6 +68,10 @@ class AnnotatorGUI:
         btn_load_img_dir = ttk.Button(top_frame, text="Select Image Directory", command=self.select_image_dir)
         btn_load_img_dir.pack(side=tk.LEFT, padx=5)
 
+        btn_reset = ttk.Button(top_frame, text="Reset Annotations", command=self.reset_annotations, state=tk.DISABLED)
+        btn_reset.pack(side=tk.LEFT, padx=5)
+        self.reset_btn = btn_reset
+
         # 전체 map계산 버튼
         self.calc_dataset_map_btn = ttk.Button(top_frame, text="Calculate Dataset mAP", command=self.calculate_dataset_map, 
                                                state=tk.DISABLED)
@@ -287,7 +291,8 @@ class AnnotatorGUI:
         can_calc_dataset = self.gt_images is not None and self.pred_annotations_all is not None
         self.calc_dataset_map_btn.config(state=tk.NORMAL if can_calc_dataset else tk.DISABLED)
 
-
+        can_reset = (self.current_image_id is not None and self.pred_annotations_all is not None)
+        self.reset_btn.config(state=tk.NORMAL if can_reset else tk.DISABLED)
 
     def load_gt_data(self):
         filepath = filedialog.askopenfilename(
@@ -980,6 +985,16 @@ class AnnotatorGUI:
                 if pr_idx in matched_pr: continue
                 counter += 1
                 self.instance_numbers[f"pred_{pr_idx}"] = counter
+
+    def reset_annotations(self):
+        """현재 선택한 이미지에 대해, 편집 전(로드 직후) 상태로 되돌립니다."""
+        if not self.current_image_id:
+            return
+        # predictions를 다시 로드
+        self.load_annotations_for_current_image()
+        # 화면 갱신
+        self.update_visualization_and_map()
+        self.update_status("Annotations have been reset.", 100)
 
 if __name__ == '__main__':
     root = tk.Tk()
