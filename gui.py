@@ -41,7 +41,8 @@ class AnnotatorGUI:
         self.current_pr_prec = None
         self.current_pr_rec = None
         self.selected_pr_class_id = None
-        self.instance_numbers = {}
+        self._copy = copy
+
 
         # 이미지 메타데이터 및 정렬 관련 변수
         self.image_metadata = {}  # 이미지 ID를 키로, 메타데이터 딕셔너리를 값으로 가짐
@@ -68,10 +69,18 @@ class AnnotatorGUI:
         btn_load_img_dir = ttk.Button(top_frame, text="Select Image Directory", command=self.select_image_dir)
         btn_load_img_dir.pack(side=tk.LEFT, padx=5)
 
+        btn_reset = ttk.Button(top_frame, text="Reset Annotations", command=self.reset_annotations, state=tk.DISABLED)
+        btn_reset.pack(side=tk.LEFT, padx=5)
+        self.reset_btn = btn_reset
+
         # 전체 map계산 버튼
         self.calc_dataset_map_btn = ttk.Button(top_frame, text="Calculate Dataset mAP", command=self.calculate_dataset_map, 
                                                state=tk.DISABLED)
         self.calc_dataset_map_btn.pack(side=tk.LEFT, padx=5)
+
+        btn_reset = ttk.Button(top_frame, text="Reset Annotations", command=self.reset_annotations, state=tk.DISABLED)
+        btn_reset.pack(side=tk.LEFT, padx=5)
+        self.reset_btn = btn_reset
 
         # --- Bottom Frame ---
         bottom_frame = ttk.Frame(self.master, padding="5 0 5 5")
@@ -287,7 +296,8 @@ class AnnotatorGUI:
         can_calc_dataset = self.gt_images is not None and self.pred_annotations_all is not None
         self.calc_dataset_map_btn.config(state=tk.NORMAL if can_calc_dataset else tk.DISABLED)
 
-
+        can_reset = (self.current_image_id is not None and self.pred_annotations_all is not None)
+        self.reset_btn.config(state=tk.NORMAL if can_reset else tk.DISABLED)
 
     def load_gt_data(self):
         filepath = filedialog.askopenfilename(
@@ -930,56 +940,15 @@ class AnnotatorGUI:
             f"Dataset mAP (IoU={iou_thresh:.2f}), (Conf={conf_thresh:.2f}): {mean_ap:.4f}"
         )
 
-    def _compute_instance_numbers(self, iou_thresh=0.5):
-        """GT↔PR 박스 매칭 후, 클래스별로 동일 번호 부여"""
-        self.instance_numbers.clear()
-        # 클래스별 처리
-        present_cats = {
-            ann['category_id'] for ann in self.current_gt_anns
-        } | {
-            ann['category_id'] for ann in self.current_pred_anns
-        }
-        for cat_id in present_cats:
-            # 해당 클래스만 추출
-            gt_list = [(i,ann) for i,ann in enumerate(self.current_gt_anns) if ann['category_id']==cat_id]
-            pr_list = [(i,ann) for i,ann in enumerate(self.current_pred_anns) if ann['category_id']==cat_id]
-            matched_gt = set()
-            matched_pr = set()
-            counter = 0
-
-            # IoU 함수
-            def iou(a, b):
-                x1 = max(a[0], b[0]); y1 = max(a[1], b[1])
-                x2 = min(a[0]+a[2], b[0]+b[2]); y2 = min(a[1]+a[3], b[1]+b[3])
-                inter = max(0, x2-x1) * max(0, y2-y1)
-                union = a[2]*a[3] + b[2]*b[3] - inter
-                return inter/union if union>0 else 0
-
-            # 1) GT↔PR 매칭
-            for gt_idx, gt_ann in gt_list:
-                best_pr = None; best_iou = 0
-                for pr_idx, pr_ann in pr_list:
-                    if pr_idx in matched_pr: continue
-                    val = iou(gt_ann['bbox'], pr_ann['bbox'])
-                    if val>best_iou:
-                        best_iou, best_pr = val, pr_idx
-                if best_iou >= iou_thresh:
-                    counter += 1
-                    self.instance_numbers[f"gt_{gt_idx}"]   = counter
-                    self.instance_numbers[f"pred_{best_pr}"] = counter
-                    matched_gt.add(gt_idx); matched_pr.add(best_pr)
-
-            # 2) 매칭되지 않은 GT
-            for gt_idx, _ in gt_list:
-                if gt_idx in matched_gt: continue
-                counter += 1
-                self.instance_numbers[f"gt_{gt_idx}"] = counter
-
-            # 3) 매칭되지 않은 PR
-            for pr_idx, _ in pr_list:
-                if pr_idx in matched_pr: continue
-                counter += 1
-                self.instance_numbers[f"pred_{pr_idx}"] = counter
+    def reset_annotations(self):
+        """현재 선택한 이미지에 대해, 편집 전(로드 직후) 상태로 되돌립니다."""
+        if not self.current_image_id:
+            return
+        # predictions를 다시 로드
+        self.load_annotations_for_current_image()
+        # 화면 갱신
+        self.update_visualization_and_map()
+        self.update_status("Annotations have been reset.", 100)
 
 if __name__ == '__main__':
     root = tk.Tk()
