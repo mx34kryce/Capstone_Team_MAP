@@ -277,13 +277,14 @@ class InteractiveCanvas(tk.Canvas):
             self.on_mouse_motion(event) # 패닝 종료 후 커서 즉시 업데이트
 
 
-    def set_data(self, gt_annotations, pred_annotations, categories, confidence_threshold, visible_class_ids):
+    def set_data(self, gt_annotations, pred_annotations, categories, confidence_threshold, visible_class_ids,visible_instances=None):
         """데이터 설정 및 다시 그리기"""
         self.gt_annotations = gt_annotations
         self.pred_annotations = pred_annotations
         self.categories = categories
         self.confidence_threshold = confidence_threshold
         self.visible_class_ids = visible_class_ids
+        self.visible_instances = visible_instances or set()
         self.redraw_annotations()
 
     def redraw_annotations(self):
@@ -298,7 +299,10 @@ class InteractiveCanvas(tk.Canvas):
         # GT 그리기
         for idx, ann in enumerate(self.gt_annotations):
             cat_id = ann['category_id']
-            if cat_id not in self.visible_class_ids: continue
+            key = f"gt_{idx}"
+            if (cat_id not in self.visible_class_ids
+                    or key not in self.visible_instances):
+                continue
 
             bbox = ann['bbox'] # 원본 이미지 좌표계 [xmin, ymin, w, h]
             label = self.categories.get(cat_id, {}).get('name', f'ID:{cat_id}')
@@ -325,7 +329,11 @@ class InteractiveCanvas(tk.Canvas):
         for idx, ann in enumerate(self.pred_annotations):
             cat_id = ann['category_id']
             score = ann['score']
-            if score < self.confidence_threshold or cat_id not in self.visible_class_ids: continue
+            key = f"pred_{idx}"
+            if (score < self.confidence_threshold
+                    or cat_id not in self.visible_class_ids
+                    or key not in self.visible_instances):
+                continue
 
             bbox = ann['bbox'] # 원본 이미지 좌표계
             label = self.categories.get(cat_id, {}).get('name', f'ID:{cat_id}')

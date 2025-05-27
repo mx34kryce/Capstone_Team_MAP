@@ -37,6 +37,7 @@ class AnnotatorGUI:
         self.current_pred_anns = []
         self.image_dir = ""
         self.class_visibility = {}
+        self.instance_visibility = {}
         self.current_pr_prec = None
         self.current_pr_rec = None
         self.selected_pr_class_id = None
@@ -304,7 +305,7 @@ class AnnotatorGUI:
                 self._calculate_all_images_metadata()
             self._populate_image_treeview()
 
-            self._populate_class_checkboxes()
+            self._populate_visibility_checkboxes()
             self._update_pr_class_selector()
 
             messagebox.showinfo("Success", f"Loaded {len(self.gt_images)} images and {len(self.categories)} categories from GT.")
@@ -314,25 +315,75 @@ class AnnotatorGUI:
             self.update_status("Error loading GT.", 0)
         self._update_ui_state()
 
-    def _populate_class_checkboxes(self, filter_ids=None):
-        for widget in self.class_checkbox_frame.winfo_children():
-            widget.destroy()
+    def _populate_visibility_checkboxes(self):
+        """현재 이미지의 클래스별 · 인스턴스별 체크박스 재구성"""
+        # 기존 위젯 전부 삭제
+        for w in self.class_checkbox_frame.winfo_children():
+            w.destroy()
         self.class_visibility.clear()
+        self.instance_visibility.clear()
 
-        if not self.categories:
+        if not self.current_gt_anns and not self.current_pred_anns:
             return
 
-        # filter_ids가 있으면 해당 ID만, 없으면 전체
+        # 이미지에 등장하는 클래스 ID 집합
+        present_cats = {
+            ann['category_id'] for ann in self.current_gt_anns
+        } | {
+            ann['category_id'] for ann in self.current_pred_anns
+        }
+        # 해당 클래스만 이름 순으로 정렬
         sorted_categories = sorted(
-            (item for item in self.categories.items()
-            if filter_ids is None or item[0] in filter_ids),
-            key=lambda item: item[1]['name'])
+            ( (cid, info) for cid, info in self.categories.items()
+              if cid in present_cats ),
+            key=lambda item: item[1]['name']
+        )
 
-        for cat_id, category in sorted_categories:
-            var = tk.BooleanVar(value=True)
-            cb = ttk.Checkbutton(self.class_checkbox_frame, text=category['name'], variable=var, command=self.on_visibility_change)
-            cb.pack(anchor="w", fill="x")
-            self.class_visibility[cat_id] = var
+        for cat_id, cat_info in sorted_categories:
+            class_name = cat_info['name']
+            # — 클래스 전체 토글
+            class_var = tk.BooleanVar(value=True)
+            ttk.Checkbutton(
+                self.class_checkbox_frame,
+                text=class_name,
+                variable=class_var,
+                command=self.on_visibility_change
+            ).pack(anchor="w", fill="x")
+            self.class_visibility[cat_id] = class_var
+
+            # — GT 인스턴스 토글
+            gt_counter = 0
+            for idx, ann in enumerate(self.current_gt_anns):
+                if ann['category_id'] != cat_id:
+                    continue
+                gt_counter += 1
+                key = f"gt_{idx}"
+                label = f"GT_{class_name}_{gt_counter}"
+                iv = tk.BooleanVar(value=True)
+                ttk.Checkbutton(
+                    self.class_checkbox_frame,
+                    text=label,
+                    variable=iv,
+                    command=self.on_visibility_change
+                ).pack(anchor="w", padx=20, fill="x")
+                self.instance_visibility[key] = iv
+
+            # — Prediction 인스턴스 토글
+            pr_counter = 0
+            for idx, ann in enumerate(self.current_pred_anns):
+                if ann['category_id'] != cat_id:
+                    continue
+                pr_counter += 1
+                key = f"pred_{idx}"
+                label = f"PR_{class_name}_{pr_counter}"
+                iv = tk.BooleanVar(value=True)
+                ttk.Checkbutton(
+                    self.class_checkbox_frame,
+                    text=label,
+                    variable=iv,
+                    command=self.on_visibility_change
+                ).pack(anchor="w", padx=20, fill="x")
+                self.instance_visibility[key] = iv
 
     def _update_pr_class_selector(self):
         self.pr_class_combobox.set('')
@@ -431,7 +482,7 @@ class AnnotatorGUI:
         pred_ids = {ann['category_id'] for ann in self.current_pred_anns}
         image_class_ids = gt_ids.union(pred_ids)
         
-        self._populate_class_checkboxes(filter_ids=image_class_ids)
+        self._populate_visibility_checkboxes()
         self._update_pr_class_selector()
         self.update_visualization_and_map()
         self._update_ui_state()
@@ -482,12 +533,16 @@ class AnnotatorGUI:
 
         visible_class_ids = {cat_id for cat_id, var in self.class_visibility.items() if var.get()}
 
+        visible_insts = {
+            k for k, var in self.instance_visibility.items() if var.get()
+        }
         self.canvas.set_data(
             self.current_gt_anns,
             self.current_pred_anns,
             self.categories,
             conf_thresh,
-            visible_class_ids
+            visible_class_ids,
+            visible_insts      # ← 추가 파라미터
         )
 
         filtered_preds_for_map = [p for p in self.current_pred_anns if p['score'] >= conf_thresh]
