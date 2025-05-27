@@ -43,6 +43,7 @@ class AnnotatorGUI:
         self.selected_pr_class_id = None
         self._copy = copy
 
+
         # 이미지 메타데이터 및 정렬 관련 변수
         self.image_metadata = {}  # 이미지 ID를 키로, 메타데이터 딕셔너리를 값으로 가짐
         self.sort_column = "filename"  # 초기 정렬 컬럼 (Treeview 컬럼 ID 기준)
@@ -362,13 +363,16 @@ class AnnotatorGUI:
             self.class_visibility[cat_id] = class_var
 
             # — GT 인스턴스 토글
-            gt_counter = 0
+            gt_list = []
             for idx, ann in enumerate(self.current_gt_anns):
-                if ann['category_id'] != cat_id:
-                    continue
-                gt_counter += 1
+                if ann['category_id'] != cat_id: continue
                 key = f"gt_{idx}"
-                label = f"GT_{class_name}_{gt_counter}"
+                num = self.instance_numbers.get(key, 0)
+                gt_list.append((num, key))
+            gt_list.sort(key=lambda x: x[0])
+            
+            for num, key in gt_list:
+                label = f"GT_{class_name}_{num}"
                 iv = tk.BooleanVar(value=True)
                 ttk.Checkbutton(
                     self.class_checkbox_frame,
@@ -379,13 +383,16 @@ class AnnotatorGUI:
                 self.instance_visibility[key] = iv
 
             # — Prediction 인스턴스 토글
-            pr_counter = 0
+            pr_list = []
             for idx, ann in enumerate(self.current_pred_anns):
-                if ann['category_id'] != cat_id:
-                    continue
-                pr_counter += 1
+                if ann['category_id'] != cat_id: continue
                 key = f"pred_{idx}"
-                label = f"PR_{class_name}_{pr_counter}"
+                num = self.instance_numbers.get(key, 0)
+                pr_list.append((num, key))
+            pr_list.sort(key=lambda x: x[0])
+
+            for num, key in pr_list:
+                label = f"PR_{class_name}_{num}"
                 iv = tk.BooleanVar(value=True)
                 ttk.Checkbutton(
                     self.class_checkbox_frame,
@@ -492,6 +499,7 @@ class AnnotatorGUI:
         pred_ids = {ann['category_id'] for ann in self.current_pred_anns}
         image_class_ids = gt_ids.union(pred_ids)
         
+        self._compute_instance_numbers()
         self._populate_visibility_checkboxes()
         self._update_pr_class_selector()
         self.update_visualization_and_map()
@@ -941,7 +949,6 @@ class AnnotatorGUI:
         # 화면 갱신
         self.update_visualization_and_map()
         self.update_status("Annotations have been reset.", 100)
-
 
 if __name__ == '__main__':
     root = tk.Tk()
