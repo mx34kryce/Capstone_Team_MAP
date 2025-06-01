@@ -43,19 +43,51 @@ class AnnotatorGUI:
         self.selected_pr_class_id = None
         self.instance_numbers = {}
 
-        # 이미지 메타데이터 및 정렬 관련 변수
+        # 이미지 메타데이터
         self.image_metadata = {}  # 이미지 ID를 키로, 메타데이터 딕셔너리를 값으로 가짐
-        self.sort_column = "filename"  # 초기 정렬 컬럼 (Treeview 컬럼 ID 기준)
-        self.sort_order_asc = True  # True: 오름차순, False: 내림차순
+
+        # 썸네일 관련 변수
+        self.thumbnail_cache = {}
+        self.thumbnail_size = (64, 64) # 썸네일 크기
+        self.placeholder_thumbnail = None
+        self.scroll_debounce_id = None
+
+        # 탐색기 뷰 관련 변수
+        self.explorer_canvas = None
+        self.explorer_scrollbar_y = None
+        self.all_image_ids_ordered = [] # 정렬된 이미지 ID 목록
+        self.canvas_item_map = {} # image_id -> {'thumb': canvas_id, 'text': canvas_id, 'bg': canvas_id}
+        self.item_height_in_explorer = self.thumbnail_size[1] + 20 # 각 아이템의 높이 (썸네일 + 텍스트 + 패딩)
+        self.item_padding = 2
+        self.selected_explorer_image_id = None
+        self.style = None # ttk.Style 객체를 저장할 인스턴스 변수
+
 
         # UI 요소 생성
         self._create_widgets()
+        self._create_placeholder_thumbnail()
+
 
         # 초기 상태 설정
         self._update_ui_state()
 
+    def _create_placeholder_thumbnail(self):
+        # 로드 전 또는 실패 시 표시할 기본 이미지 생성
+        try:
+            img = Image.new("RGB", self.thumbnail_size, "gray80")
+            # 간단한 X 표시 추가 (선택 사항)
+            # from PIL import ImageDraw
+            # draw = ImageDraw.Draw(img)
+            # draw.line((0, 0) + self.thumbnail_size, fill="black", width=1)
+            # draw.line((0, self.thumbnail_size[1], self.thumbnail_size[0], 0), fill="black", width=1)
+            self.placeholder_thumbnail = ImageTk.PhotoImage(img)
+        except Exception as e:
+            print(f"Error creating placeholder thumbnail: {e}")
+            self.placeholder_thumbnail = None
+
+
     def _create_widgets(self):
-        style = ttk.Style(self.master)
+        self.style = ttk.Style(self.master) # self.style에 할당
 
         # --- Top Frame ---
         top_frame = ttk.Frame(self.master, padding="5 5 5 0")
@@ -95,40 +127,28 @@ class AnnotatorGUI:
         left_frame = ttk.Frame(main_frame, padding="5")
         left_frame.grid(row=0, column=0, sticky="ns")
 
-        # 이미지 목록 (Treeview로 변경)
+        # 이미지 목록 (캔버스 기반 탐색기 뷰로 변경)
         ttk.Label(left_frame, text="Images:").pack(anchor="w")
-        img_tree_frame = ttk.Frame(left_frame)
-        img_tree_frame.pack(fill="both", expand=True, pady=(0, 10))  # expand=True로 변경
+        explorer_outer_frame = ttk.Frame(left_frame)
+        explorer_outer_frame.pack(fill="both", expand=True, pady=(0, 10))
 
-        self.image_treeview = ttk.Treeview(img_tree_frame,
-                                           columns=("filename", "ap", "classes", "instances"),
-                                           show="headings", selectmode=tk.BROWSE, height=15)  # exportselection -> selectmode, 값은 tk.BROWSE 또는 tk.EXTENDED 등
-        self.image_treeview.heading("filename", text="File Name", command=lambda: self._sort_treeview_column("filename"))
-        self.image_treeview.heading("ap", text="AP Score", command=lambda: self._sort_treeview_column("ap"))
-        self.image_treeview.heading("classes", text="Classes", command=lambda: self._sort_treeview_column("classes"))
-        self.image_treeview.heading("instances", text="Instances", command=lambda: self._sort_treeview_column("instances"))
+        self.explorer_canvas = tk.Canvas(explorer_outer_frame, background=self.style.lookup('TFrame', 'background'), highlightthickness=0)
+        self.explorer_scrollbar_y = ttk.Scrollbar(explorer_outer_frame, orient="vertical", command=self.explorer_canvas.yview)
+        self.explorer_canvas.configure(yscrollcommand=self.explorer_scrollbar_y.set)
 
-        self.image_treeview.column("filename", width=150, anchor="w")
-        self.image_treeview.column("ap", width=70, anchor="e")
-        self.image_treeview.column("classes", width=60, anchor="e")
-        self.image_treeview.column("instances", width=70, anchor="e")
+        self.explorer_scrollbar_y.pack(side=tk.RIGHT, fill=tk.Y)
+        self.explorer_canvas.pack(side=tk.LEFT, fill="both", expand=True)
 
-        tree_scrollbar_y = ttk.Scrollbar(img_tree_frame, orient="vertical", command=self.image_treeview.yview)
-        tree_scrollbar_x = ttk.Scrollbar(img_tree_frame, orient="horizontal", command=self.image_treeview.xview)
-        self.image_treeview.configure(yscrollcommand=tree_scrollbar_y.set, xscrollcommand=tree_scrollbar_x.set)
-
-        tree_scrollbar_y.pack(side=tk.RIGHT, fill=tk.Y)
-        tree_scrollbar_x.pack(side=tk.BOTTOM, fill=tk.X)
-        self.image_treeview.pack(side=tk.LEFT, fill="both", expand=True)
-
-        self.image_treeview.bind('<<TreeviewSelect>>', self.on_image_select)
+        self.explorer_canvas.bind('<Configure>', lambda e: self._populate_explorer_view()) # 캔버스 크기 변경 시 재구성
+        # 스크롤 이벤트는 yscrollcommand를 통해 _on_explorer_scroll에서 처리되도록 할 것이므로 직접 바인딩은 제거
+        # 대신, yscrollcommand가 호출될 때 _on_explorer_scroll이 트리거되도록 scrollbar의 command와 canvas의 yscrollcommand를 설정
 
         # 클래스 가시성
         visibility_frame = ttk.LabelFrame(left_frame, text="Class Visibility", padding="5")
         visibility_frame.pack(fill="both", expand=True, pady=5)
 
         # 현재 테마의 TFrame 배경색을 가져옵니다.
-        frame_bg_color = style.lookup('TFrame', 'background')
+        frame_bg_color = self.style.lookup('TFrame', 'background')
 
         vis_canvas = tk.Canvas(visibility_frame, borderwidth=0, background=frame_bg_color, highlightthickness=0)
         self.class_checkbox_frame = ttk.Frame(vis_canvas, padding="2") # ttk.Frame은 기본적으로 테마의 배경색을 따릅니다.
@@ -243,6 +263,184 @@ class AnnotatorGUI:
         self.canvas.grid(row=0, column=0, sticky="nsew")
         self.canvas.set_annotation_update_callback(self.on_annotation_update)
 
+    def _on_explorer_scroll(self, *args):
+        # Canvas의 yview를 먼저 호출하여 스크롤을 적용
+        # 이 메서드는 scrollbar의 command나 canvas의 yscrollcommand에 직접 연결되지 않고,
+        # yscrollcommand에 의해 _update_explorer_view_items가 호출되도록 하는 것이 더 일반적임.
+        # 여기서는 ttk.Scrollbar의 command가 self.explorer_canvas.yview로 설정되어 있고,
+        # self.explorer_canvas의 yscrollcommand가 self.explorer_scrollbar_y.set으로 되어 있음.
+        # 스크롤 발생 시 썸네일 업데이트를 위해 yscrollcommand를 가로채거나,
+        # 또는 스크롤 후 명시적으로 업데이트 함수를 호출해야 함.
+        # ttk.Scrollbar는 command를 직접 실행하므로, canvas.yview를 호출하고 그 다음에 우리 로직을 실행.
+        
+        self.explorer_canvas.yview(*args) # 실제 스크롤 적용
+
+        if self.scroll_debounce_id:
+            self.master.after_cancel(self.scroll_debounce_id)
+        self.scroll_debounce_id = self.master.after_idle(self._update_explorer_view_items)
+
+
+    def _load_thumbnail(self, image_id_str):
+        image_id = int(image_id_str)
+        if not self.image_dir or not self.gt_images or image_id not in self.gt_images:
+            return self.placeholder_thumbnail
+
+        if image_id_str in self.thumbnail_cache:
+            # 캐시에 플레이스홀더가 아닌 실제 이미지가 있는지 확인
+            if self.thumbnail_cache[image_id_str] != self.placeholder_thumbnail:
+                return self.thumbnail_cache[image_id_str]
+            # 캐시에 플레이스홀더가 있다면, 다시 로드 시도 (예: 이미지 파일이 나중에 생겼을 수 있음)
+
+        image_info = self.gt_images[image_id]
+        img_path = coco_loader.get_image_path(image_info, self.image_dir)
+
+        if not img_path or not os.path.exists(img_path):
+            self.thumbnail_cache[image_id_str] = self.placeholder_thumbnail # 실패 시 플레이스홀더 캐싱
+            return self.placeholder_thumbnail
+        
+        try:
+            img = Image.open(img_path)
+            img.thumbnail(self.thumbnail_size, Image.Resampling.LANCZOS)
+            photo_img = ImageTk.PhotoImage(img)
+            self.thumbnail_cache[image_id_str] = photo_img
+            return photo_img
+        except Exception as e:
+            print(f"Error loading thumbnail for image ID {image_id} ({img_path}): {e}")
+            self.thumbnail_cache[image_id_str] = self.placeholder_thumbnail # 예외 발생 시 플레이스홀더 캐싱
+            return self.placeholder_thumbnail
+
+    def _update_explorer_view_items(self):
+        if not self.image_dir or not self.gt_images or not self.all_image_ids_ordered:
+            self.explorer_canvas.delete("all_items")
+            self.canvas_item_map.clear()
+            # 스크롤 영역도 초기화
+            self.explorer_canvas.config(scrollregion=(0, 0, self.explorer_canvas.winfo_width(), 0))
+            return
+
+        canvas_width = self.explorer_canvas.winfo_width()
+        if canvas_width <= 1: # 아직 캔버스가 제대로 그려지지 않음
+            self.master.after(50, self._update_explorer_view_items) # 잠시 후 다시 시도
+            return
+
+        # 1. 보이는 아이템 인덱스 범위 결정
+        try:
+            scroll_top_fraction, _ = self.explorer_canvas.yview()
+        except tk.TclError: # 위젯이 파괴되었거나 아직 준비되지 않은 경우
+            return
+            
+        content_height = len(self.all_image_ids_ordered) * self.item_height_in_explorer
+        visible_top_y = scroll_top_fraction * content_height
+        
+        first_visible_idx = int(visible_top_y / self.item_height_in_explorer)
+        # 한 화면에 보이는 아이템 수 + 버퍼
+        num_items_in_view_approx = int(self.explorer_canvas.winfo_height() / self.item_height_in_explorer) + 1 
+
+        # 2. 렌더링/캐싱할 아이템 범위 결정 (현재 보이는 10개 + 위/아래 10개 캐싱)
+        # 실제로는 "그릴" 범위를 결정하고, _load_thumbnail이 내부적으로 캐싱함.
+        # "현재 있는 인덱스에 있는 10개" -> first_visible_idx 부터 10개
+        # "미리 위쪽 10개, 아래쪽 10개"
+        # 따라서 first_visible_idx - 10 부터 first_visible_idx + 10 + (현재 화면에 보이는 갯수) 까지 로드/그리기
+        
+        # 그릴 범위: 보이는 첫 아이템 기준 -10 ~ +10 + 화면에 보이는 갯수
+        # 이렇게 하면 화면에 보이는 것과 그 주변이 그려짐
+        render_buffer = 10 
+        render_start_idx = max(0, first_visible_idx - render_buffer)
+        render_end_idx = min(len(self.all_image_ids_ordered), first_visible_idx + num_items_in_view_approx + render_buffer)
+
+        # 3. 기존 아이템 정리 및 새 아이템 그리기
+        current_ids_to_render = set(self.all_image_ids_ordered[i] for i in range(render_start_idx, render_end_idx))
+        
+        # 삭제할 아이템 (현재 맵에 있지만 그릴 범위에 없는 것)
+        ids_to_remove = []
+        for img_id_str_map in self.canvas_item_map:
+            img_id_map = int(img_id_str_map)
+            if img_id_map not in current_ids_to_render:
+                ids_to_remove.append(img_id_str_map)
+
+        for img_id_str_map_to_remove in ids_to_remove:
+            item_refs = self.canvas_item_map.pop(img_id_str_map_to_remove)
+            if item_refs.get('bg'): self.explorer_canvas.delete(item_refs['bg'])
+            if item_refs.get('thumb'): self.explorer_canvas.delete(item_refs['thumb'])
+            if item_refs.get('text'): self.explorer_canvas.delete(item_refs['text'])
+            
+        # 추가/업데이트할 아이템
+        for i in range(render_start_idx, render_end_idx):
+            image_id = self.all_image_ids_ordered[i]
+            image_id_str = str(image_id)
+            
+            y_pos = i * self.item_height_in_explorer + self.item_padding
+
+            # 배경 사각형 (선택 및 클릭용)
+            bg_color = "blue" if image_id == self.selected_explorer_image_id else self.style.lookup('TFrame', 'background')
+            text_color = "white" if image_id == self.selected_explorer_image_id else self.style.lookup('TLabel', 'foreground')
+
+            if image_id_str not in self.canvas_item_map:
+                self.canvas_item_map[image_id_str] = {}
+                
+                bg_rect = self.explorer_canvas.create_rectangle(
+                    self.item_padding, y_pos, 
+                    canvas_width - self.item_padding, y_pos + self.item_height_in_explorer - self.item_padding * 2,
+                    fill=bg_color, outline="", tags=("item_bg", f"item_bg_{image_id_str}")
+                )
+                self.canvas_item_map[image_id_str]['bg'] = bg_rect
+                self.explorer_canvas.tag_bind(bg_rect, "<Button-1>", lambda e, img_id=image_id: self._handle_explorer_item_click(img_id))
+
+                thumbnail_obj = self._load_thumbnail(image_id_str)
+                thumb_item = self.explorer_canvas.create_image(
+                    self.item_padding + self.thumbnail_size[0] / 2, 
+                    y_pos + (self.item_height_in_explorer - self.item_padding*2) / 2, 
+                    image=thumbnail_obj, tags=("item_thumb", f"item_thumb_{image_id_str}")
+                )
+                self.canvas_item_map[image_id_str]['thumb'] = thumb_item
+
+                filename = self.image_metadata.get(image_id, {}).get("filename", f"ID: {image_id}")
+                text_item = self.explorer_canvas.create_text(
+                    self.item_padding + self.thumbnail_size[0] + 10, 
+                    y_pos + (self.item_height_in_explorer - self.item_padding*2) / 2,
+                    text=filename, anchor="w", fill=text_color,
+                    width=canvas_width - (self.thumbnail_size[0] + 20), # 텍스트 줄바꿈 너비
+                    tags=("item_text", f"item_text_{image_id_str}")
+                )
+                self.canvas_item_map[image_id_str]['text'] = text_item
+            else: # 이미 아이템이 존재하면 색상 등 업데이트
+                self.explorer_canvas.itemconfig(self.canvas_item_map[image_id_str]['bg'], fill=bg_color)
+                self.explorer_canvas.itemconfig(self.canvas_item_map[image_id_str]['text'], fill=text_color)
+                # 썸네일이 플레이스홀더였다가 실제 이미지로 변경된 경우 업데이트
+                current_thumb_on_canvas = self.explorer_canvas.itemcget(self.canvas_item_map[image_id_str]['thumb'], "image")
+                new_thumb_obj = self._load_thumbnail(image_id_str) # 캐시에서 가져오거나 로드
+                if str(new_thumb_obj) != current_thumb_on_canvas : # PhotoImage 객체는 문자열 표현로 비교
+                     self.explorer_canvas.itemconfig(self.canvas_item_map[image_id_str]['thumb'], image=new_thumb_obj)
+
+        # 스크롤 영역 업데이트
+        self.explorer_canvas.config(scrollregion=(0, 0, canvas_width, content_height))
+        self.explorer_canvas.addtag_all("all_items")
+
+
+    def _handle_explorer_item_click(self, image_id):
+        if self.selected_explorer_image_id == image_id: # 이미 선택된 아이템 다시 클릭
+            return
+
+        # 이전 선택 해제
+        if self.selected_explorer_image_id is not None:
+            old_id_str = str(self.selected_explorer_image_id)
+            if old_id_str in self.canvas_item_map and self.canvas_item_map[old_id_str].get('bg'):
+                self.explorer_canvas.itemconfig(self.canvas_item_map[old_id_str]['bg'], fill=self.style.lookup('TFrame', 'background'))
+                self.explorer_canvas.itemconfig(self.canvas_item_map[old_id_str]['text'], fill=self.style.lookup('TLabel', 'foreground'))
+
+
+        self.selected_explorer_image_id = image_id
+        
+        # 새 아이템 선택 표시
+        new_id_str = str(image_id)
+        if new_id_str in self.canvas_item_map and self.canvas_item_map[new_id_str].get('bg'):
+            self.explorer_canvas.itemconfig(self.canvas_item_map[new_id_str]['bg'], fill="blue") # 선택 색상
+            self.explorer_canvas.itemconfig(self.canvas_item_map[new_id_str]['text'], fill="white")
+
+
+        self.on_image_select_logic(image_id) # 실제 이미지 로딩 및 처리 로직 호출
+        self._update_ui_state()
+
+
     def update_status(self, message, progress=None):
         self.status_label.config(text=message)
         if progress is not None:
@@ -267,8 +465,9 @@ class AnnotatorGUI:
         gt_loaded = self.gt_images is not None and self.categories is not None
         pred_loaded = self.pred_annotations_all is not None
         img_dir_set = bool(self.image_dir)
-        selected_items = self.image_treeview.selection()
-        img_selected = bool(selected_items) and self.current_image_id is not None
+        # selected_items = self.image_treeview.selection() # Treeview 제거됨
+        # img_selected = bool(selected_items) and self.current_image_id is not None
+        img_selected = self.selected_explorer_image_id is not None and self.current_image_id is not None
 
         can_calculate_map = gt_loaded and pred_loaded and img_dir_set and img_selected
         self.conf_slider.config(state=tk.NORMAL if can_calculate_map else tk.DISABLED)
@@ -308,10 +507,15 @@ class AnnotatorGUI:
 
         if self.gt_images and self.categories:
             if self.pred_annotations_all:  # 예측도 로드된 경우에만 메타데이터 계산
-                self._calculate_all_images_metadata()
-            self._populate_image_treeview()
+                self._calculate_all_images_metadata() # 내부에서 _populate_explorer_view 호출
+            else:
+                # image_metadata가 아직 없을 수 있으므로, gt_images 기반으로 임시 생성 또는 _calculate_all_images_metadata 호출 준비
+                # 여기서는 _populate_explorer_view가 image_metadata를 사용하므로, 먼저 채워야 함.
+                # 간단하게는 파일명만이라도 채우거나, _calculate_all_images_metadata가 일부라도 실행되도록.
+                # 지금은 _calculate_all_images_metadata가 pred_annotations_all이 없을 때도 GT 기반으로 채우도록 수정됨.
+                self._calculate_all_images_metadata() # GT만 있어도 메타데이터 일부 계산 및 UI 채우기
 
-            self._populate_visibility_checkboxes()
+            self._populate_visibility_checkboxes() # current_gt_anns 등이 필요하므로 이미지 선택 후 호출되거나, 초기화 필요
             self._update_pr_class_selector()
 
             messagebox.showinfo("Success", f"Loaded {len(self.gt_images)} images and {len(self.categories)} categories from GT.")
@@ -319,6 +523,8 @@ class AnnotatorGUI:
         else:
             messagebox.showerror("Error", "Failed to load GT annotations or categories.")
             self.update_status("Error loading GT.", 0)
+            self.all_image_ids_ordered.clear() # 데이터 로드 실패 시 목록 비우기
+            self._update_explorer_view_items() # 빈 목록으로 캔버스 업데이트
         self._update_ui_state()
 
     def _populate_visibility_checkboxes(self):
@@ -428,10 +634,9 @@ class AnnotatorGUI:
             self.update_status(f"Predictions loaded for {len(self.pred_annotations_all)} images.", 100)
 
             if self.gt_images:  # GT도 로드된 경우 메타데이터 계산 및 Treeview 업데이트
-                self._calculate_all_images_metadata()
-                self._populate_image_treeview()
+                self._calculate_all_images_metadata() # 내부에서 _populate_explorer_view 호출
 
-            if self.current_image_id:
+            if self.current_image_id: # 현재 선택된 이미지가 있다면 해당 이미지 정보 갱신
                 self.load_annotations_for_current_image()
                 self.update_visualization_and_map()
         else:
@@ -443,62 +648,54 @@ class AnnotatorGUI:
         dirpath = filedialog.askdirectory(title="Select Image Directory")
         if not dirpath:
             return
-        self.image_dir = dirpath
-        messagebox.showinfo("Success", f"Image directory set to: {self.image_dir}")
-        self.update_status(f"Image directory set: {self.image_dir}", 100)
-        if self.current_image_id:
-            self.load_image_and_annotations(self.current_image_id)
+        
+        if self.image_dir != dirpath: # 이미지 디렉토리가 실제로 변경된 경우에만 캐시 초기화
+            self.image_dir = dirpath
+            self.thumbnail_cache.clear() # 캐시 초기화
+            messagebox.showinfo("Success", f"Image directory set to: {self.image_dir}")
+            self.update_status(f"Image directory set: {self.image_dir}", 100)
+            
+            # 탐색기 뷰 업데이트 (썸네일 다시 로드 필요)
+            if self.gt_images: 
+                self._populate_explorer_view() # 전체 목록 다시 구성 및 그리기
+            
+            if self.current_image_id: 
+                self.load_image_and_annotations(self.current_image_id) # 현재 이미지 다시 로드
+        else: # 같은 디렉토리를 다시 선택한 경우
+            self.update_status(f"Image directory remains: {self.image_dir}", 100)
+
         self._update_ui_state()
 
-    def on_image_select(self, event):
-        selected_items = self.image_treeview.selection()
-        if not selected_items:
-            return
-        selected_item = selected_items[0]
-
-        try:
-            new_image_id = int(selected_item)  # Treeview 아이템 ID가 이미지 ID라고 가정
-        except ValueError:
-            item_values = self.image_treeview.item(selected_item, 'values')
-            if not item_values:
-                return
-            filename_to_find = item_values[0]
-            found_id = None
-            for img_id, img_info in self.gt_images.items():
-                if img_info.get('file_name') == filename_to_find:
-                    found_id = img_id
-                    break
-            if found_id is None:
-                print(f"Error: Could not find image ID for filename {filename_to_find}")
-                return
-            new_image_id = found_id
-
-        if new_image_id == self.current_image_id:
+    def on_image_select_logic(self, new_image_id): # 기존 on_image_select의 로직 부분
+        if new_image_id == self.current_image_id and self.canvas.has_image(): # 이미 로드된 동일 이미지면 무시 (선택 효과는 _handle_explorer_item_click에서 처리)
             return
 
         self.current_image_id = new_image_id
         print(f"Selected Image ID: {self.current_image_id}")
         if not self.image_dir:
             messagebox.showwarning("Warning", "Please select the image directory first.")
-            if selected_item:
-                self.image_treeview.selection_remove(selected_item)
+            # 선택 해제 로직 필요 시 추가
             self.current_image_id = None
+            self.selected_explorer_image_id = None # UI 선택도 해제
+            # 이전 선택 UI 복원
+            self._update_explorer_view_items() # 선택 효과 업데이트
             self.update_status("Select image directory first.", 0)
             return
 
         self.update_status(f"Loading image ID: {self.current_image_id}...", 0)
         self.load_image_and_annotations(self.current_image_id)
+        
         self.update_status(f"Image ID: {self.current_image_id} loaded.", 100)
         # 선택된 이미지에 등장하는 클래스만 필터링하여 체크박스 업데이트
         gt_ids   = {ann['category_id'] for ann in self.current_gt_anns}
         pred_ids = {ann['category_id'] for ann in self.current_pred_anns}
-        image_class_ids = gt_ids.union(pred_ids)
+        # image_class_ids = gt_ids.union(pred_ids) # 사용되지 않음
         
         self._compute_instance_numbers()
         self._populate_visibility_checkboxes()
-        self._update_pr_class_selector()
-        self.update_visualization_and_map()
-        self._update_ui_state()
+        self._update_pr_class_selector() # PR 곡선 클래스 선택기 업데이트
+        self.update_visualization_and_map() # 메인 캔버스 및 mAP 업데이트
+        # self._update_ui_state() # _handle_explorer_item_click 마지막에 호출됨
 
     def load_image_and_annotations(self, image_id):
         if not self.gt_images or image_id not in self.gt_images:
@@ -815,93 +1012,89 @@ class AnnotatorGUI:
         }
 
     def _calculate_all_images_metadata(self):
-        """모든 이미지에 대한 메타데이터를 계산하여 self.image_metadata에 저장합니다."""
+        """모든 이미지에 대한 메타데이터를 계산하여 self.image_metadata에 저장하고, 탐색기 뷰를 채웁니다."""
         self.image_metadata.clear()
-        if not self.gt_images or not self.pred_annotations_all or not self.categories:
-            if self.gt_images:
-                for img_id in self.gt_images.keys():
-                    gt_anns_img = self.gt_annotations.get(img_id, [])
-                    self.image_metadata[img_id] = {
-                        "filename": self.gt_images[img_id].get('file_name', f'Image ID: {img_id}'),
-                        "ap": "N/A",
-                        "classes": len(set(ann['category_id'] for ann in gt_anns_img)),
-                        "instances": len(gt_anns_img)
-                    }
+        
+        # GT 이미지가 로드되지 않았으면 아무것도 하지 않음
+        if not self.gt_images:
+            self.all_image_ids_ordered.clear()
+            self._populate_explorer_view() # 탐색기 뷰 클리어
             return
 
-        self.update_status("Calculating metadata for all images...", 0)
-        total_images = len(self.gt_images)
-        for i, img_id in enumerate(self.gt_images.keys()):
-            metadata = self._calculate_image_metadata(img_id)
-            if metadata:
-                self.image_metadata[img_id] = metadata
-            if (i + 1) % 10 == 0 or (i + 1) == total_images:
-                self.update_status(f"Calculating metadata... {i+1}/{total_images}", int((i+1)/total_images*100))
-        self.update_status("Metadata calculation complete.", 100)
-
-    def _populate_image_treeview(self):
-        """self.image_metadata를 사용하여 Treeview를 채웁니다."""
-        for item in self.image_treeview.get_children():
-            self.image_treeview.delete(item)
-
-        if not self.image_metadata and self.gt_images:
-            temp_metadata = {}
-            for img_id, img_info in self.gt_images.items():
+        # GT 이미지는 있지만, 예측이나 카테고리가 없을 경우 기본 메타데이터 생성
+        if not self.pred_annotations_all or not self.categories:
+            self.update_status("Calculating basic metadata for images...", 0)
+            for i, img_id in enumerate(self.gt_images.keys()):
                 gt_anns_img = self.gt_annotations.get(img_id, [])
-                temp_metadata[img_id] = {
-                    "filename": img_info.get('file_name', f'Image ID: {img_id}'),
-                    "ap": "N/A",
+                self.image_metadata[img_id] = {
+                    "filename": self.gt_images[img_id].get('file_name', f'Image ID: {img_id}'),
+                    "ap": "N/A", # AP 계산 불가
                     "classes": len(set(ann['category_id'] for ann in gt_anns_img)),
                     "instances": len(gt_anns_img)
                 }
-            data_to_display = list(temp_metadata.items())
-        elif not self.image_metadata:
+                if (i + 1) % 20 == 0 or (i + 1) == len(self.gt_images):
+                    self.update_status(f"Basic metadata... {i+1}/{len(self.gt_images)}", int((i+1)/len(self.gt_images)*100))
+            self.update_status("Basic metadata calculation complete.", 100)
+            self._populate_explorer_view() # 탐색기 뷰 채우기
             return
+
+        # 모든 데이터가 있을 경우 AP 포함 전체 메타데이터 계산
+        self.update_status("Calculating full metadata for all images...", 0)
+        total_images = len(self.gt_images)
+        for i, img_id in enumerate(self.gt_images.keys()):
+            metadata = self._calculate_image_metadata(img_id) # 기존 AP 계산 로직 사용
+            if metadata:
+                self.image_metadata[img_id] = metadata
+            if (i + 1) % 10 == 0 or (i + 1) == total_images:
+                self.update_status(f"Calculating full metadata... {i+1}/{total_images}", int((i+1)/total_images*100))
+        self.update_status("Full metadata calculation complete.", 100)
+        self._populate_explorer_view() # 탐색기 뷰 채우기
+
+
+    def _populate_explorer_view(self):
+        """
+        self.image_metadata를 기반으로 self.all_image_ids_ordered를 설정하고,
+        캔버스의 스크롤 영역을 설정한 후 _update_explorer_view_items를 호출합니다.
+        """
+        if not self.image_metadata and self.gt_images: # 메타데이터는 없지만 GT 이미지는 있는 경우 (예: 초기 로드)
+            # 파일 이름 순으로 정렬된 ID 목록 생성
+            sorted_gt_items = sorted(self.gt_images.items(), key=lambda item: item[1].get('file_name', str(item[0])))
+            self.all_image_ids_ordered = [img_id for img_id, _ in sorted_gt_items]
+        elif self.image_metadata:
+            # 메타데이터의 파일 이름으로 정렬 (AP 등 다른 기준으로 정렬하려면 여기 수정)
+            # 현재는 filename으로 정렬된 image_id 리스트를 만듦
+            sorted_meta_items = sorted(self.image_metadata.items(), key=lambda item: item[1].get("filename", str(item[0])))
+            self.all_image_ids_ordered = [img_id for img_id, _ in sorted_meta_items]
         else:
-            data_to_display = list(self.image_metadata.items())
+            self.all_image_ids_ordered = []
 
-        key_map = {"File Name": "filename", "AP Score": "ap", "Classes": "classes", "Instances": "instances"}
-        sort_key_actual = key_map.get(self.sort_column, "filename")
+        # 기존 캔버스 아이템 모두 삭제 및 맵 초기화
+        self.explorer_canvas.delete("all_items") # 이 태그를 가진 모든 아이템 삭제
+        self.canvas_item_map.clear()
 
-        def get_sort_value(item):
-            value = item[1].get(sort_key_actual)
-            if value == "N/A":
-                return -float('inf') if self.sort_order_asc else float('inf')
-            if isinstance(value, (int, float)):
-                return value
-            return str(value).lower()
+        if not self.all_image_ids_ordered:
+            self.explorer_canvas.config(scrollregion=(0,0,self.explorer_canvas.winfo_width(),0))
+            return
 
-        try:
-            sorted_data = sorted(data_to_display, key=get_sort_value, reverse=not self.sort_order_asc)
-        except TypeError as e:
-            print(f"Sorting error: {e}. Data may contain mixed types for column {self.sort_column}.")
-            sorted_data = data_to_display
+        content_height = len(self.all_image_ids_ordered) * self.item_height_in_explorer
+        canvas_width = self.explorer_canvas.winfo_width()
+        if canvas_width <=1 : canvas_width = 200 # 초기 너비 방어 코드
 
-        for img_id, meta in sorted_data:
-            ap_display = f"{meta['ap']:.4f}" if isinstance(meta['ap'], float) else meta['ap']
-            self.image_treeview.insert("", tk.END, id=str(img_id),
-                                       values=(meta["filename"], ap_display, meta["classes"], meta["instances"]))
+        self.explorer_canvas.config(scrollregion=(0, 0, canvas_width, content_height))
+        
+        # 스크롤바의 command를 _on_explorer_scroll로 설정하여 스크롤 시 업데이트 되도록 함
+        # _create_widgets에서 scrollbar의 command는 canvas.yview로, canvas의 yscrollcommand는 scrollbar.set으로 이미 설정됨.
+        # 스크롤 이벤트 발생 시 _on_explorer_scroll을 호출하기 위해 yscrollcommand를 수정하거나,
+        # 여기서는 scrollbar의 command를 직접 _on_explorer_scroll로 변경
+        self.explorer_scrollbar_y.config(command=self._on_explorer_scroll)
+
+
+        self._update_explorer_view_items() # 실제 아이템 그리기/업데이트
+
 
     def _sort_treeview_column(self, column_id):  # column_name 대신 column_id (Treeview 컬럼 식별자) 사용
-        """Treeview 컬럼 헤더 클릭 시 정렬 수행"""
-        if self.sort_column == column_id:
-            self.sort_order_asc = not self.sort_order_asc
-        else:
-            self.sort_column = column_id
-            self.sort_order_asc = True  # 기본 오름차순
-
-        # 헤더에 정렬 방향 표시
-        for col_id_iter in self.image_treeview["columns"]:
-            current_text = self.image_treeview.heading(col_id_iter, "text")
-            # 기존 화살표 제거 (정규식 사용이 더 안전할 수 있음)
-            current_text = current_text.replace(' ▲', '').replace(' ▼', '')
-            if col_id_iter == self.sort_column:
-                arrow = ' ▲' if self.sort_order_asc else ' ▼'
-                self.image_treeview.heading(col_id_iter, text=current_text + arrow)
-            else:
-                self.image_treeview.heading(col_id_iter, text=current_text)
-
-        self._populate_image_treeview()
+        """Treeview 컬럼 헤더 클릭 시 정렬 수행 (기능 제거됨)"""
+        pass # 정렬 기능 제거
 
     def calculate_dataset_map(self):
         #전체 이미지에 대해 mAP를 계산하여 다이얼로그로 보여줌.
