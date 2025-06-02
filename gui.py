@@ -949,10 +949,17 @@ class AnnotatorGUI:
             return
 
         calc_cat_id = None if self.selected_pr_class_id == "Overall" else self.selected_pr_class_id
+        
+        # confidence threshold 기반 예측 필터링 추가
+        conf_thresh = self.conf_slider.get()
+        filtered_pred_anns = [
+            pred for pred in self.current_pred_anns 
+            if pred.get('score', 0.0) >= conf_thresh
+        ]
 
         prec, rec, num_gt = map_calculator.get_pr_arrays(
             self.current_gt_anns,
-            self.current_pred_anns,
+            filtered_pred_anns,  # 필터링된 예측 전달
             category_id=calc_cat_id,
             iou_threshold=iou_threshold
         )
@@ -963,13 +970,14 @@ class AnnotatorGUI:
 
             if calc_cat_id is not None:
                 ap = map_calculator.calculate_ap(rec, prec)
-                title = f"PR Curve: {self.categories[calc_cat_id]['name']} (AP={ap:.3f})"
+                title = f"PR Curve: {self.categories[calc_cat_id]['name']} (AP={ap:.3f}, Conf≥{conf_thresh:.2f})"
             else:
-                title = f"PR Curve: Overall (IoU={iou_threshold:.2f})"
+                title = f"PR Curve: Overall (IoU={iou_threshold:.2f}, Conf≥{conf_thresh:.2f})"
 
             self.pr_ax.set_title(title, fontsize=9)
         else:
-            self.pr_ax.set_title(f"PR Curve: {self.pr_class_var.get()} (No Data)", fontsize=9)
+            title_suffix = f"(Conf≥{conf_thresh:.2f}, No Data)"
+            self.pr_ax.set_title(f"PR Curve: {self.pr_class_var.get()} {title_suffix}", fontsize=9)
 
         self.pr_ax.set_xlabel("Recall")
         self.pr_ax.set_ylabel("Precision")
