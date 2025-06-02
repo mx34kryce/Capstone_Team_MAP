@@ -195,7 +195,7 @@ class AnnotatorGUI:
         right_frame.columnconfigure(0, weight=1)
 
         visibility_frame = ttk.LabelFrame(right_frame, text="Class Visibility", padding="5")
-        visibility_frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
+        visibility_frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=(0,5))
 
         # 현재 테마의 TFrame 배경색을 가져옴
         frame_bg_color = self.style.lookup('TFrame', 'background')
@@ -204,7 +204,8 @@ class AnnotatorGUI:
             visibility_frame,
             borderwidth=0,
             background=frame_bg_color,
-            highlightthickness=0
+            highlightthickness=0,
+            height=240
         )
         self.class_checkbox_frame = ttk.Frame(vis_canvas, padding="2")
 
@@ -216,7 +217,7 @@ class AnnotatorGUI:
         vis_canvas.configure(yscrollcommand=vis_scrollbar.set)
 
         vis_scrollbar.pack(side="right", fill="y")
-        vis_canvas.pack(side="left", fill="both", expand=True)
+        vis_canvas.pack(side="left", fill="both", expand=False) 
 
         vis_canvas_window = vis_canvas.create_window((0, 0), window=self.class_checkbox_frame, anchor="nw")
 
@@ -241,7 +242,7 @@ class AnnotatorGUI:
         self.canvas.set_annotation_update_callback(self.on_annotation_update)
 
         controls_container = ttk.Frame(main_frame)
-        controls_container.grid(row=1, column=1, sticky="ns", padx=(60,5), pady=15)
+        controls_container.grid(row=1, column=1, sticky="nsew", padx=(30,5), pady=(0,12))
 
         # ▶ AP 레이블(중앙 슬라이더 바로 위)
         self.map_label = ttk.Label(controls_container, text="Current Image AP: N/A", font=("Arial", 10))
