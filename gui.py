@@ -728,10 +728,29 @@ class AnnotatorGUI:
             self.pr_class_combobox['values'] = []
             return
 
-        class_names = ["Overall"] + sorted([cat['name'] for cat_id, cat in self.categories.items()])
+        # 현재 이미지의 GT 어노테이션에 포함된 클래스만 필터링
+        if self.current_gt_anns:
+            gt_class_ids = {ann['category_id'] for ann in self.current_gt_anns}
+            available_classes = [
+                self.categories[cat_id]['name'] 
+                for cat_id in gt_class_ids 
+                if cat_id in self.categories
+            ]
+            class_names = ["Overall"] + sorted(available_classes)
+        else:
+            # GT 어노테이션이 없는 경우 Overall만 표시
+            class_names = ["Overall"]
+        
         self.pr_class_combobox['values'] = class_names
-        self.pr_class_combobox.set("Overall")
-        self.selected_pr_class_id = "Overall"
+        
+        # 기존 선택이 새로운 목록에 있는지 확인
+        current_selection = self.pr_class_var.get()
+        if current_selection not in class_names:
+            self.pr_class_combobox.set("Overall")
+            self.selected_pr_class_id = "Overall"
+        else:
+            # 기존 선택 유지
+            self.pr_class_var.set(current_selection)
 
     def on_visibility_change(self):
         self.update_visualization_and_map()
