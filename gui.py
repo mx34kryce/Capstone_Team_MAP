@@ -62,7 +62,10 @@ class AnnotatorGUI:
         self.item_padding = 2
         self.selected_explorer_image_id = None
         self.style = None # ttk.Style 객체를 저장할 인스턴스 변수
-
+        
+        # 정렬 관련 변수 추가
+        self.sort_criterion = "filename"  # 기본 정렬 기준
+        self.sort_descending = False  # 기본은 오름차순
 
         # UI 요소 생성
         self._create_widgets()
@@ -130,6 +133,26 @@ class AnnotatorGUI:
 
         # 이미지 목록 (캔버스 기반 탐색기 뷰로 변경)
         ttk.Label(left_frame, text="Images:").pack(anchor="w")
+        
+        # 정렬 옵션 프레임 추가
+        sort_frame = ttk.Frame(left_frame)
+        sort_frame.pack(fill="x", pady=(0, 5))
+        
+        ttk.Label(sort_frame, text="Sort by:").pack(side="left", padx=(0, 5))
+        
+        self.sort_var = tk.StringVar(value="filename")
+        sort_options = ["filename", "ap", "classes", "instances"]
+        self.sort_combobox = ttk.Combobox(sort_frame, textvariable=self.sort_var, 
+                                         values=sort_options, state="readonly", width=10)
+        self.sort_combobox.pack(side="left", padx=(0, 5))
+        self.sort_combobox.bind("<<ComboboxSelected>>", self.on_sort_change)
+        
+        self.sort_desc_var = tk.BooleanVar(value=False)
+        self.sort_desc_checkbox = ttk.Checkbutton(sort_frame, text="Desc", 
+                                                 variable=self.sort_desc_var,
+                                                 command=self.on_sort_change)
+        self.sort_desc_checkbox.pack(side="left")
+
         explorer_outer_frame = ttk.Frame(left_frame)
         explorer_outer_frame.pack(fill="both", expand=True, pady=(0, 10))
 
@@ -939,6 +962,20 @@ class AnnotatorGUI:
                 self._populate_visibility_checkboxes()
                 self.update_visualization_and_map()
                 
+                # threshold 변경 시 메타데이터도 다시 계산 (AP가 변경될 수 있음)
+                if self.gt_images and self.pred_annotations_all and self.categories:
+                    # 현재 이미지만 업데이트하거나, 전체 업데이트 여부를 사용자가 결정할 수 있도록 할 수 있음
+                    # 여기서는 현재 이미지의 메타데이터만 업데이트
+                    current_metadata = self._calculate_image_metadata(self.current_image_id)
+                    if current_metadata:
+                        self.image_metadata[self.current_image_id] = current_metadata
+                        # 정렬 기준이 AP인 경우 목록 재정렬
+                        if self.sort_criterion == "ap":
+                            self._populate_explorer_view()
+                        else:
+                            # AP가 아닌 경우 현재 아이템의 텍스트만 업데이트
+                            self._update_explorer_view_items()
+                
         except Exception as e:
             print(f"Error in on_threshold_change: {e}")
 
@@ -1215,10 +1252,34 @@ class AnnotatorGUI:
             sorted_gt_items = sorted(self.gt_images.items(), key=lambda item: item[1].get('file_name', str(item[0])))
             self.all_image_ids_ordered = [img_id for img_id, _ in sorted_gt_items]
         elif self.image_metadata:
-            # 메타데이터의 파일 이름으로 정렬 (AP 등 다른 기준으로 정렬하려면 여기 수정)
-            # 현재는 filename으로 정렬된 image_id 리스트를 만듦
-            sorted_meta_items = sorted(self.image_metadata.items(), key=lambda item: item[1].get("filename", str(item[0])))
-            self.all_image_ids_ordered = [img_id for img_id, _ in sorted_meta_items]
+            # 정렬 기준에 따라 정렬
+            def get_sort_key(item):
+                img_id, metadata = item
+                if self.sort_criterion == "filename":
+                    return metadata.get("filename", str(img_id)).lower()
+                elif self.sort_criterion == "ap":
+                    ap_val = metadata.get("ap", "N/A")
+                    if ap_val == "N/A":
+                        return -1 if self.sort_descending else float('inf')  # N/A를 끝으로 보냄
+                    return float(ap_val) if isinstance(ap_val, (int, float, str)) else 0.0
+                elif self.sort_criterion == "classes":
+                    return metadata.get("classes", 0)
+                elif self.sort_criterion == "instances":
+                    return metadata.get("instances", 0)
+                else:
+                    return metadata.get("filename", str(img_id)).lower()
+            
+            try:
+                sorted_meta_items = sorted(self.image_metadata.items(), 
+                                         key=get_sort_key, 
+                                         reverse=self.sort_descending)
+                self.all_image_ids_ordered = [img_id for img_id, _ in sorted_meta_items]
+            except (ValueError, TypeError) as e:
+                print(f"Sorting error: {e}, falling back to filename sort")
+                # 정렬 실패 시 파일명으로 폴백
+                sorted_meta_items = sorted(self.image_metadata.items(), 
+                                         key=lambda item: item[1].get("filename", str(item[0])).lower())
+                self.all_image_ids_ordered = [img_id for img_id, _ in sorted_meta_items]
         else:
             self.all_image_ids_ordered = []
 
@@ -1342,6 +1403,15 @@ class AnnotatorGUI:
         # 화면 갱신
         self.update_visualization_and_map()
         self.update_status("Annotations have been reset.", 100)
+
+    def on_sort_change(self, event=None):
+        """정렬 기준이나 방향이 변경되었을 때 호출"""
+        self.sort_criterion = self.sort_var.get()
+        self.sort_descending = self.sort_desc_var.get()
+        
+        if self.image_metadata:
+            self._populate_explorer_view()
+            self.update_status(f"Images sorted by {self.sort_criterion} ({'desc' if self.sort_descending else 'asc'})", 100)
 
 if __name__ == '__main__':
     root = tk.Tk()
