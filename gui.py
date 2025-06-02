@@ -566,6 +566,7 @@ class AnnotatorGUI:
            - 이전 on/off 상태 유지
            - 이전 토글(펼침/접힘) 상태 유지
            - 클래스별로 컨테이너 프레임을 만들어 인스턴스가 해당 클래스 바로 아래에 붙도록 함
+           - 현재 confidence threshold에 따라 필터링된 예측만 표시
         """
         # 1) 기존 체크박스 및 토글 상태 백업
         prev_class_states    = {cat_id: var.get() for cat_id, var in self.class_visibility.items()}
@@ -583,11 +584,18 @@ class AnnotatorGUI:
         if not (self.current_gt_anns or self.current_pred_anns):
             return
 
-        # 3) 화면에 등장하는 클래스 ID들을 이름순으로 정렬
+        # 현재 confidence threshold로 예측 필터링
+        conf_thresh = self.conf_slider.get()
+        filtered_pred_anns = [
+            pred for pred in self.current_pred_anns 
+            if pred.get('score', 0.0) >= conf_thresh
+        ]
+
+        # 3) 화면에 등장하는 클래스 ID들을 이름순으로 정렬 (필터링된 예측 기준)
         present_cats = {
             ann['category_id'] for ann in self.current_gt_anns
         } | {
-            ann['category_id'] for ann in self.current_pred_anns
+            ann['category_id'] for ann in filtered_pred_anns  # 필터링된 예측 사용
         }
         sorted_categories = sorted(
             ((cid, info) for cid, info in self.categories.items() if cid in present_cats),
@@ -602,7 +610,7 @@ class AnnotatorGUI:
 
             # 3-2) 해당 클래스의 AP 계산 (현재 IoU & Confidence 슬라이더 값 기준)
             gt_cat  = [ann for ann in self.current_gt_anns   if ann['category_id'] == cat_id]
-            pr_cat  = [ann for ann in self.current_pred_anns if ann['category_id'] == cat_id and ann.get('score', 0.0) >= self.conf_slider.get()]
+            pr_cat  = [ann for ann in filtered_pred_anns if ann['category_id'] == cat_id]  # 이미 필터링된 예측 사용
             iou_thr = self.iou_slider.get()
             prec, rec, _ = map_calculator.get_pr_arrays(
                 gt_cat, pr_cat,
@@ -647,7 +655,7 @@ class AnnotatorGUI:
             # 4-5) 클래스 체크박스 생성: 이전 on/off 상태 유지, 없으면 기본 True
             init_class_state = prev_class_states.get(cat_id, True)
             class_var = tk.BooleanVar(value=init_class_state)
-            label_text = f"{class_name} (AP={ap_value:.4f})"
+            label_text = f"{class_name} (AP={ap_value:.4f}, Conf≥{conf_thresh:.2f})"
             class_cb = ttk.Checkbutton(
                 class_frame,
                 text=label_text,
@@ -685,10 +693,13 @@ class AnnotatorGUI:
                 self.instance_visibility[key] = iv
 
             # ─────────────────────────────────────────────────────────────────────
-            # 6) Prediction 인스턴스 체크박스 생성 (inst_frame 안에)
+            # 6) Prediction 인스턴스 체크박스 생성 (inst_frame 안에) - 필터링된 예측만 표시
             pr_list = []
             for idx, ann in enumerate(self.current_pred_anns):
                 if ann['category_id'] != cat_id:
+                    continue
+                # confidence threshold 체크 - 필터링된 예측만 체크박스로 표시
+                if ann.get('score', 0.0) < conf_thresh:
                     continue
                 key = f"pred_{idx}"
                 num = self.instance_numbers.get(key, 0)
@@ -904,6 +915,8 @@ class AnnotatorGUI:
             self.iou_value_label.config(text=f"{self.iou_slider.get():.2f}")
 
             if self.current_image_id:
+                # threshold 변경 시 체크박스를 재구성하여 필터링된 객체를 반영
+                self._compute_instance_numbers()
                 self._populate_visibility_checkboxes()
                 self.update_visualization_and_map()
                 
