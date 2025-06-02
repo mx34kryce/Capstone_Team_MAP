@@ -166,6 +166,11 @@ class AnnotatorGUI:
         self.explorer_canvas.bind('<Configure>', lambda e: self._populate_explorer_view()) # 캔버스 크기 변경 시 재구성
         # 스크롤 이벤트는 yscrollcommand를 통해 _on_explorer_scroll에서 처리되도록 할 것이므로 직접 바인딩은 제거
         # 대신, yscrollcommand가 호출될 때 _on_explorer_scroll이 트리거되도록 scrollbar의 command와 canvas의 yscrollcommand를 설정
+        
+        # 이미지 탐색기 캔버스에 마우스 휠 바인딩 추가
+        self.explorer_canvas.bind("<MouseWheel>", self._on_mousewheel_explorer) # Windows
+        self.explorer_canvas.bind("<Button-4>", self._on_mousewheel_explorer)   # Linux (scroll up)
+        self.explorer_canvas.bind("<Button-5>", self._on_mousewheel_explorer)   # Linux (scroll down)
 
         # 클래스 가시성
         visibility_frame = ttk.LabelFrame(left_frame, text="Class Visibility", padding="5")
@@ -192,6 +197,11 @@ class AnnotatorGUI:
 
         vis_canvas.bind("<Configure>", _configure_vis_canvas)
         self.class_checkbox_frame.bind("<Configure>", _configure_checkbox_frame)
+
+        # 클래스 가시성 캔버스에 마우스 휠 바인딩 추가
+        vis_canvas.bind("<MouseWheel>", lambda event: self._on_mousewheel_generic(event, vis_canvas)) # Windows
+        vis_canvas.bind("<Button-4>", lambda event: self._on_mousewheel_generic(event, vis_canvas))   # Linux (scroll up)
+        vis_canvas.bind("<Button-5>", lambda event: self._on_mousewheel_generic(event, vis_canvas))   # Linux (scroll down)
 
         # --- Right Frame: 컨트롤, 정보, PR Curve ---
         right_frame = ttk.Frame(main_frame, padding="5")
@@ -288,6 +298,31 @@ class AnnotatorGUI:
         self.canvas.grid(row=0, column=0, sticky="nsew")
         self.canvas.set_annotation_update_callback(self.on_annotation_update)
 
+    def _on_mousewheel_explorer(self, event):
+        # 마우스 휠 이벤트가 explorer_canvas 영역에서 발생했는지 확인
+        widget_under_mouse = event.widget
+        if widget_under_mouse == self.explorer_canvas:
+            # 스크롤 방향 결정
+            if event.num == 5 or event.delta < 0:  # Scroll down
+                self.explorer_canvas.yview_scroll(1, "units")
+            elif event.num == 4 or event.delta > 0:  # Scroll up
+                self.explorer_canvas.yview_scroll(-1, "units")
+            
+            # 스크롤 후 썸네일 캐싱 및 아이템 업데이트
+            if self.scroll_debounce_id:
+                self.master.after_cancel(self.scroll_debounce_id)
+            self.scroll_debounce_id = self.master.after_idle(self._update_explorer_view_items)
+
+    def _on_mousewheel_generic(self, event, canvas):
+        # 범용 마우스 휠 처리 함수 (클래스 가시성 캔버스용)
+        widget_under_mouse = event.widget
+        if widget_under_mouse == canvas:
+            # 스크롤 방향 결정
+            if event.num == 5 or event.delta < 0:  # Scroll down
+                canvas.yview_scroll(1, "units")
+            elif event.num == 4 or event.delta > 0:  # Scroll up
+                canvas.yview_scroll(-1, "units")
+
     def _on_explorer_scroll(self, *args):
         # Canvas의 yview를 먼저 호출하여 스크롤을 적용
         # 이 메서드는 scrollbar의 command나 canvas의 yscrollcommand에 직접 연결되지 않고,
@@ -334,6 +369,19 @@ class AnnotatorGUI:
             self.thumbnail_cache[image_id_str] = self.placeholder_thumbnail # 예외 발생 시 플레이스홀더 캐싱
             return self.placeholder_thumbnail
 
+    def _preload_thumbnails_in_background(self, image_ids_to_preload):
+        """백그라운드에서 썸네일을 미리 로드하여 캐싱"""
+        def preload_worker():
+            for image_id in image_ids_to_preload:
+                if str(image_id) not in self.thumbnail_cache:
+                    # 메인 스레드가 아닌 곳에서 실행되므로, 실제 로딩은 메인 스레드에서 해야 함
+                    self.master.after_idle(lambda img_id=image_id: self._load_thumbnail(str(img_id)))
+        
+        # 백그라운드 스레드 대신 after_idle을 사용하여 메인 스레드에서 비동기적으로 처리
+        for image_id in image_ids_to_preload:
+            if str(image_id) not in self.thumbnail_cache:
+                self.master.after_idle(lambda img_id=image_id: self._load_thumbnail(str(img_id)))
+
     def _update_explorer_view_items(self):
         if not self.image_dir or not self.gt_images or not self.all_image_ids_ordered:
             self.explorer_canvas.delete("all_items")
@@ -360,17 +408,16 @@ class AnnotatorGUI:
         # 한 화면에 보이는 아이템 수 + 버퍼
         num_items_in_view_approx = int(self.explorer_canvas.winfo_height() / self.item_height_in_explorer) + 1 
 
-        # 2. 렌더링/캐싱할 아이템 범위 결정 (현재 보이는 10개 + 위/아래 10개 캐싱)
-        # 실제로는 "그릴" 범위를 결정하고, _load_thumbnail이 내부적으로 캐싱함.
-        # "현재 있는 인덱스에 있는 10개" -> first_visible_idx 부터 10개
-        # "미리 위쪽 10개, 아래쪽 10개"
-        # 따라서 first_visible_idx - 10 부터 first_visible_idx + 10 + (현재 화면에 보이는 갯수) 까지 로드/그리기
+        # 2. 렌더링/캐싱할 아이템 범위 결정 (현재 보이는 영역 + 위/아래 확장된 캐싱 영역)
+        render_buffer = 10  # 현재 보이는 영역 주변에 그릴 아이템 수
+        preload_buffer = 20  # 추가로 미리 로드할 아이템 수 (캐싱용)
         
-        # 그릴 범위: 보이는 첫 아이템 기준 -10 ~ +10 + 화면에 보이는 갯수
-        # 이렇게 하면 화면에 보이는 것과 그 주변이 그려짐
-        render_buffer = 10 
         render_start_idx = max(0, first_visible_idx - render_buffer)
         render_end_idx = min(len(self.all_image_ids_ordered), first_visible_idx + num_items_in_view_approx + render_buffer)
+        
+        # 캐싱을 위한 확장된 범위
+        preload_start_idx = max(0, first_visible_idx - preload_buffer)
+        preload_end_idx = min(len(self.all_image_ids_ordered), first_visible_idx + num_items_in_view_approx + preload_buffer)
 
         # 3. 기존 아이템 정리 및 새 아이템 그리기
         current_ids_to_render = set(self.all_image_ids_ordered[i] for i in range(render_start_idx, render_end_idx))
@@ -387,8 +434,12 @@ class AnnotatorGUI:
             if item_refs.get('bg'): self.explorer_canvas.delete(item_refs['bg'])
             if item_refs.get('thumb'): self.explorer_canvas.delete(item_refs['thumb'])
             if item_refs.get('text'): self.explorer_canvas.delete(item_refs['text'])
+
+        # 4. 백그라운드 썸네일 프리로딩 (캐싱 영역)
+        preload_ids = [self.all_image_ids_ordered[i] for i in range(preload_start_idx, preload_end_idx)]
+        self._preload_thumbnails_in_background(preload_ids)
             
-        # 추가/업데이트할 아이템
+        # 5. 현재 렌더링 영역의 아이템 그리기/업데이트
         for i in range(render_start_idx, render_end_idx):
             image_id = self.all_image_ids_ordered[i]
             image_id_str = str(image_id)
