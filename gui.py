@@ -58,7 +58,7 @@ class AnnotatorGUI:
         self.explorer_scrollbar_y = None
         self.all_image_ids_ordered = [] # 정렬된 이미지 ID 목록
         self.canvas_item_map = {} # image_id -> {'thumb': canvas_id, 'text': canvas_id, 'bg': canvas_id}
-        self.item_height_in_explorer = self.thumbnail_size[1] + 20 # 각 아이템의 높이 (썸네일 + 텍스트 + 패딩)
+        self.item_height_in_explorer = self.thumbnail_size[1] + 40 # 각 아이템의 높이 (썸네일 + 텍스트 + 메타데이터 + 패딩)
         self.item_padding = 2
         self.selected_explorer_image_id = None
         self.style = None # ttk.Style 객체를 저장할 인스턴스 변수
@@ -395,18 +395,50 @@ class AnnotatorGUI:
                 )
                 self.canvas_item_map[image_id_str]['thumb'] = thumb_item
 
+                # 파일명과 메타데이터 정보를 포함한 텍스트 생성
                 filename = self.image_metadata.get(image_id, {}).get("filename", f"ID: {image_id}")
+                metadata = self.image_metadata.get(image_id, {})
+                ap_score = metadata.get("ap", "N/A")
+                class_count = metadata.get("classes", 0)
+                instance_count = metadata.get("instances", 0)
+                
+                # AP score를 숫자로 포맷팅 (N/A가 아닌 경우)
+                if ap_score != "N/A" and isinstance(ap_score, (int, float)):
+                    ap_display = f"{ap_score:.3f}"
+                else:
+                    ap_display = str(ap_score)
+                
+                # 멀티라인 텍스트 생성
+                display_text = f"{filename}\nAP: {ap_display} | Classes: {class_count} | Instances: {instance_count}"
+                
                 text_item = self.explorer_canvas.create_text(
                     self.item_padding + self.thumbnail_size[0] + 10, 
                     y_pos + (self.item_height_in_explorer - self.item_padding*2) / 2,
-                    text=filename, anchor="w", fill=text_color,
+                    text=display_text, anchor="w", fill=text_color,
                     width=canvas_width - (self.thumbnail_size[0] + 20), # 텍스트 줄바꿈 너비
                     tags=("item_text", f"item_text_{image_id_str}")
                 )
                 self.canvas_item_map[image_id_str]['text'] = text_item
             else: # 이미 아이템이 존재하면 색상 등 업데이트
                 self.explorer_canvas.itemconfig(self.canvas_item_map[image_id_str]['bg'], fill=bg_color)
-                self.explorer_canvas.itemconfig(self.canvas_item_map[image_id_str]['text'], fill=text_color)
+                
+                # 텍스트 내용도 업데이트 (메타데이터가 변경될 수 있음)
+                filename = self.image_metadata.get(image_id, {}).get("filename", f"ID: {image_id}")
+                metadata = self.image_metadata.get(image_id, {})
+                ap_score = metadata.get("ap", "N/A")
+                class_count = metadata.get("classes", 0)
+                instance_count = metadata.get("instances", 0)
+                
+                if ap_score != "N/A" and isinstance(ap_score, (int, float)):
+                    ap_display = f"{ap_score:.3f}"
+                else:
+                    ap_display = str(ap_score)
+                
+                display_text = f"{filename}\nAP: {ap_display} | Classes: {class_count} | Instances: {instance_count}"
+                
+                self.explorer_canvas.itemconfig(self.canvas_item_map[image_id_str]['text'], 
+                                               fill=text_color, text=display_text)
+                
                 # 썸네일이 플레이스홀더였다가 실제 이미지로 변경된 경우 업데이트
                 current_thumb_on_canvas = self.explorer_canvas.itemcget(self.canvas_item_map[image_id_str]['thumb'], "image")
                 new_thumb_obj = self._load_thumbnail(image_id_str) # 캐시에서 가져오거나 로드
