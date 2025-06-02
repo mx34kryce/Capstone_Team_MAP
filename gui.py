@@ -158,51 +158,24 @@ class AnnotatorGUI:
         # 스크롤 이벤트는 yscrollcommand를 통해 _on_explorer_scroll에서 처리되도록 할 것이므로 직접 바인딩은 제거
         # 대신, yscrollcommand가 호출될 때 _on_explorer_scroll이 트리거되도록 scrollbar의 command와 canvas의 yscrollcommand를 설정
 
-        # 클래스 가시성
-        visibility_frame = ttk.LabelFrame(left_frame, text="Class Visibility", padding="5")
-        visibility_frame.pack(fill="both", expand=True, pady=5)
+        pr_curve_frame = ttk.LabelFrame(left_frame, text="Precision-Recall Curve", padding="5")
+        pr_curve_frame.pack(fill="both", expand=True, pady=5)
 
-        # 현재 테마의 TFrame 배경색을 가져옵니다.
-        frame_bg_color = self.style.lookup('TFrame', 'background')
-
-        vis_canvas = tk.Canvas(visibility_frame, borderwidth=0, background=frame_bg_color, highlightthickness=0)
-        self.class_checkbox_frame = ttk.Frame(vis_canvas, padding="2") # ttk.Frame은 기본적으로 테마의 배경색을 따릅니다.
-        vis_scrollbar = ttk.Scrollbar(visibility_frame, orient="vertical", command=vis_canvas.yview)        
-        vis_canvas.configure(yscrollcommand=vis_scrollbar.set)
-
-        vis_scrollbar.pack(side="right", fill="y")
-        vis_canvas.pack(side="left", fill="both", expand=True)
-        vis_canvas_window = vis_canvas.create_window((0, 0), window=self.class_checkbox_frame, anchor="nw")
-
-        def _configure_vis_canvas(event):
-            vis_canvas.configure(scrollregion=vis_canvas.bbox("all"))
-            vis_canvas.itemconfig(vis_canvas_window, width=event.width)
-
-        def _configure_checkbox_frame(event):
-            vis_canvas.configure(scrollregion=vis_canvas.bbox("all"))
-
-        vis_canvas.bind("<Configure>", _configure_vis_canvas)
-        self.class_checkbox_frame.bind("<Configure>", _configure_checkbox_frame)
-
-        # --- Right Frame: PR Curve ---
-        right_frame = ttk.Frame(main_frame, padding="5")
-        right_frame.grid(row=1, column=2, sticky="nsew")
-        right_frame.columnconfigure(0, weight=1)
-
-        # --- PR Curve Section ---
-        pr_curve_frame = ttk.LabelFrame(right_frame, text="Precision-Recall Curve", padding="5")
-        pr_curve_frame.grid(row=0, column=0, sticky="se", padx=5, pady=5)
-
-        # PR Curve Class Selector
+        # PR Curve용 클래스 선택 콤보박스
         pr_class_select_frame = ttk.Frame(pr_curve_frame)
         pr_class_select_frame.pack(fill=tk.X, pady=(0, 5))
         ttk.Label(pr_class_select_frame, text="Class:").pack(side=tk.LEFT, padx=(0, 5))
         self.pr_class_var = tk.StringVar()
-        self.pr_class_combobox = ttk.Combobox(pr_class_select_frame, textvariable=self.pr_class_var, state="readonly", width=25)
+        self.pr_class_combobox = ttk.Combobox(
+            pr_class_select_frame,
+            textvariable=self.pr_class_var,
+            state="readonly",
+            width=25
+        )
         self.pr_class_combobox.pack(side=tk.LEFT, fill=tk.X, expand=True)
         self.pr_class_combobox.bind("<<ComboboxSelected>>", self.on_pr_class_select)
 
-        # Matplotlib Canvas Placeholder
+        # Matplotlib 캔버스(왼쪽 PR Curve)
         self.pr_fig = Figure(figsize=(3, 2.5), dpi=100)
         self.pr_ax = self.pr_fig.add_subplot(111)
         self.pr_canvas_widget = FigureCanvasTkAgg(self.pr_fig, master=pr_curve_frame)
@@ -216,6 +189,47 @@ class AnnotatorGUI:
         self.pr_fig.tight_layout()
         self.pr_canvas_widget.draw()
 
+        # --- Right Frame: PR Curve ---
+        right_frame = ttk.Frame(main_frame, padding="5")
+        right_frame.grid(row=1, column=2, sticky="nsew")
+        right_frame.columnconfigure(0, weight=1)
+
+        visibility_frame = ttk.LabelFrame(right_frame, text="Class Visibility", padding="5")
+        visibility_frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
+
+        # 현재 테마의 TFrame 배경색을 가져옴
+        frame_bg_color = self.style.lookup('TFrame', 'background')
+
+        vis_canvas = tk.Canvas(
+            visibility_frame,
+            borderwidth=0,
+            background=frame_bg_color,
+            highlightthickness=0
+        )
+        self.class_checkbox_frame = ttk.Frame(vis_canvas, padding="2")
+
+        vis_scrollbar = ttk.Scrollbar(
+            visibility_frame,
+            orient="vertical",
+            command=vis_canvas.yview
+        )
+        vis_canvas.configure(yscrollcommand=vis_scrollbar.set)
+
+        vis_scrollbar.pack(side="right", fill="y")
+        vis_canvas.pack(side="left", fill="both", expand=True)
+
+        vis_canvas_window = vis_canvas.create_window((0, 0), window=self.class_checkbox_frame, anchor="nw")
+
+        def _configure_vis_canvas(event):
+            vis_canvas.configure(scrollregion=vis_canvas.bbox("all"))
+            vis_canvas.itemconfig(vis_canvas_window, width=event.width)
+
+        def _configure_checkbox_frame(event):
+            vis_canvas.configure(scrollregion=vis_canvas.bbox("all"))
+
+        vis_canvas.bind("<Configure>", _configure_vis_canvas)
+        self.class_checkbox_frame.bind("<Configure>", _configure_checkbox_frame)
+
         # --- Center Frame: 이미지 및 Annotation, control 표시 ---
         center_frame = ttk.Frame(main_frame, padding="5")
         center_frame.grid(row=0, column=1, columnspan=2, sticky="nsew")
@@ -227,7 +241,7 @@ class AnnotatorGUI:
         self.canvas.set_annotation_update_callback(self.on_annotation_update)
 
         controls_container = ttk.Frame(main_frame)
-        controls_container.grid(row=1, column=1, sticky="nw", padx=(100,5), pady=5)
+        controls_container.grid(row=1, column=1, sticky="ns", padx=(60,5), pady=15)
 
         # ▶ AP 레이블(중앙 슬라이더 바로 위)
         self.map_label = ttk.Label(controls_container, text="Current Image AP: N/A", font=("Arial", 10))
@@ -945,7 +959,7 @@ class AnnotatorGUI:
             self.categories,
             conf_thresh,
             visible_class_ids,
-            visible_insts      # ← 추가 파라미터
+            visible_insts      
         )
 
         filtered_preds_for_map = [p for p in self.current_pred_anns if p['score'] >= conf_thresh]
@@ -955,26 +969,8 @@ class AnnotatorGUI:
                 self.current_gt_anns, filtered_preds_for_map, self.categories, iou_thresh_map
             )
             self.map_label.config(text=f"Current Image AP (IoU={iou_thresh_map:.2f}): {mean_ap:.4f}")
-            '''
-            self.class_ap_text.config(state=tk.NORMAL)
-            self.class_ap_text.delete(1.0, tk.END)
-            if class_aps:
-                sorted_class_aps = sorted(class_aps.items(), key=lambda item: item[1], reverse=True)
-                for cat_id, ap in sorted_class_aps:
-                    cat_name = self.categories.get(cat_id, {}).get('name', f'ID:{cat_id}')
-                    self.class_ap_text.insert(tk.END, f"- {cat_name}: {ap:.4f}\n")
-            else:
-                self.class_ap_text.insert(tk.END, "No AP data available.")
-            self.class_ap_text.config(state=tk.DISABLED)
-            '''
         else:
             self.map_label.config(text=f"Current Image AP (IoU={iou_thresh_map:.2f}): N/A")
-            '''
-            self.class_ap_text.config(state=tk.NORMAL)
-            self.class_ap_text.delete(1.0, tk.END)
-            self.class_ap_text.insert(tk.END, "GT or Predictions missing for AP.")
-            self.class_ap_text.config(state=tk.DISABLED)
-            '''
 
         self.draw_pr_curve(iou_thresh_pr)
 
