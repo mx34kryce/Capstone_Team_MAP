@@ -38,6 +38,7 @@ class AnnotatorGUI:
         self.image_dir = ""
         self.class_visibility = {}
         self.instance_visibility = {}
+        self.class_expanded = {}
         self.current_pr_prec = None
         self.current_pr_rec = None
         self.selected_pr_class_id = None
@@ -173,7 +174,7 @@ class AnnotatorGUI:
         right_frame = ttk.Frame(main_frame, padding="5")
         right_frame.grid(row=0, column=2, sticky="ns")
 
-        ttk.Label(right_frame, text="Controls & Info", font=("Arial", 11, "bold")).pack(anchor="w", pady=(0, 10))
+        ttk.Label(right_frame, text="Controls", font=("Arial", 11, "bold")).pack(anchor="w", pady=(0, 10))
 
         # Confidence Threshold
         self.conf_frame = ttk.LabelFrame(right_frame, text="Confidence Threshold", padding="5")
@@ -209,6 +210,7 @@ class AnnotatorGUI:
         self.dataset_map_label = ttk.Label(right_frame, text="Dataset mAP: N/A", font=("Arial", 10))
         self.dataset_map_label.pack(anchor="w", pady=(2, 10))
 
+        '''
         # Class AP Display
         class_ap_frame = ttk.LabelFrame(right_frame, text="Class APs", padding="5")
         class_ap_frame.pack(fill=tk.X, pady=5)
@@ -217,7 +219,7 @@ class AnnotatorGUI:
         self.class_ap_text.config(yscrollcommand=ap_scrollbar.set)
         ap_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.class_ap_text.pack(side=tk.LEFT, fill=tk.X, expand=True)
-
+        '''
         # --- PR Curve Section ---
         pr_curve_frame = ttk.LabelFrame(right_frame, text="Precision-Recall Curve", padding="5")
         pr_curve_frame.pack(fill="both", expand=True, pady=5)
@@ -528,65 +530,127 @@ class AnnotatorGUI:
         self._update_ui_state()
 
     def _populate_visibility_checkboxes(self):
-        """현재 이미지의 클래스별 · 인스턴스별 체크박스 재구성"""
-        # 기존 위젯 전부 삭제
+        """현재 이미지의 클래스별 · 인스턴스별 체크박스 재구성
+        - 이전 on/off 상태 유지
+        - 이전 토글(펼침/접힘) 상태 유지
+        - 토글 버튼 크기를 작게(width=1) 설정
+        """
+        # 1) 기존 체크박스 상태 백업
+        prev_class_states    = {cat_id: var.get() for cat_id, var in self.class_visibility.items()}
+        prev_inst_states     = {key: var.get()    for key,    var in self.instance_visibility.items()}
+        prev_expanded_states = self.class_expanded.copy()  # ← 토글 상태도 백업
+
+        # 2) 프레임 초기화
         for w in self.class_checkbox_frame.winfo_children():
             w.destroy()
         self.class_visibility.clear()
         self.instance_visibility.clear()
+        self.class_expanded.clear()  # ← 이 메서드가 끝나면 새로 채워질 예정
 
-        if not self.current_gt_anns and not self.current_pred_anns:
+        # GT/Pred annotation이 하나도 없으면 바로 리턴
+        if not (self.current_gt_anns or self.current_pred_anns):
             return
 
-        # 이미지에 등장하는 클래스 ID 집합
+        # 3) 이미지에 등장하는 클래스만 골라서 이름 순 정렬
         present_cats = {
             ann['category_id'] for ann in self.current_gt_anns
         } | {
             ann['category_id'] for ann in self.current_pred_anns
         }
-        # 해당 클래스만 이름 순으로 정렬
         sorted_categories = sorted(
-            ( (cid, info) for cid, info in self.categories.items()
-              if cid in present_cats ),
+            ((cid, info) for cid, info in self.categories.items() if cid in present_cats),
             key=lambda item: item[1]['name']
         )
 
         for cat_id, cat_info in sorted_categories:
             class_name = cat_info['name']
-            # — 클래스 전체 토글
-            class_var = tk.BooleanVar(value=True)
-            ttk.Checkbutton(
-                self.class_checkbox_frame,
-                text=class_name,
+
+            # 3-1) 이전에 펼침/접힘 상태가 있으면 재사용, 없으면 기본(True=펼친 상태)
+            is_expanded = prev_expanded_states.get(cat_id, True)
+
+            # 3-2) 이 클래스의 AP 계산 (현재 IoU 슬라이더 값 기준)
+            gt_cat  = [ann for ann in self.current_gt_anns   if ann['category_id'] == cat_id]
+            pr_cat  = [ann for ann in self.current_pred_anns if ann['category_id'] == cat_id and ann.get('score', 0.0) >= self.conf_slider.get()]
+            iou_thr = self.iou_slider.get()
+            prec, rec, _ = map_calculator.get_pr_arrays(
+                gt_cat, pr_cat,
+                category_id=cat_id,
+                iou_threshold=iou_thr
+            )
+            ap_value = map_calculator.calculate_ap(rec, prec) if (prec is not None and rec is not None) else 0.0
+
+            # 3-3) 클래스 헤더용 프레임 생성
+            class_frame = ttk.Frame(self.class_checkbox_frame)
+            class_frame.pack(fill="x", anchor="w", pady=(0, 2))
+
+            # 3-4) 인스턴스 체크박스들을 담을 하위 프레임 생성
+            inst_frame = ttk.Frame(self.class_checkbox_frame)
+            if is_expanded:
+                inst_frame.pack(fill="x", anchor="w", padx=20)
+            #   collapsed 상태면 pack하지 않고, 필요 시 toggle 버튼에서 pack하게 함
+
+            # 3-5) 토글 함수 정의: 펼쳐진 상태이면 접고, 접힌 상태이면 펼침
+            def make_toggle_func(frame, btn, cid):
+                def _toggle():
+                    if frame.winfo_ismapped():
+                        frame.pack_forget()
+                        btn.config(text="+")
+                        self.class_expanded[cid] = False
+                    else:
+                        frame.pack(fill="x", anchor="w", padx=20)
+                        btn.config(text="−")
+                        self.class_expanded[cid] = True
+                return _toggle
+
+            # 3-6) 토글 버튼 생성: collapsed면 "+", expanded면 "−"
+            btn_text = "−" if is_expanded else "+"
+            toggle_btn = ttk.Button(class_frame, width=1, text=btn_text)
+            toggle_btn.pack(side="left")
+
+            # 3-7) 클래스 체크박스 생성: 이전 on/off 상태 유지, 없으면 기본 True
+            init_class_state = prev_class_states.get(cat_id, True)
+            class_var = tk.BooleanVar(value=init_class_state)
+            label_text = f"{class_name} (AP={ap_value:.4f})"
+            class_cb = ttk.Checkbutton(
+                class_frame,
+                text=label_text,
                 variable=class_var,
                 command=self.on_visibility_change
-            ).pack(anchor="w", fill="x")
+            )
+            class_cb.pack(side="left", fill="x", expand=True)
             self.class_visibility[cat_id] = class_var
 
-            # — GT 인스턴스 토글
+            # 3-8) toggle callback 연결 (inst_frame, toggle_btn, cat_id 인자로)
+            toggle_btn.config(command=make_toggle_func(inst_frame, toggle_btn, cat_id))
+
+            # 4) GT 인스턴스 체크박스 생성 (inst_frame 안에)
             gt_list = []
             for idx, ann in enumerate(self.current_gt_anns):
-                if ann['category_id'] != cat_id: continue
+                if ann['category_id'] != cat_id:
+                    continue
                 key = f"gt_{idx}"
                 num = self.instance_numbers.get(key, 0)
                 gt_list.append((num, key))
             gt_list.sort(key=lambda x: x[0])
-            
+
             for num, key in gt_list:
                 label = f"GT_{class_name}_{num}"
-                iv = tk.BooleanVar(value=True)
-                ttk.Checkbutton(
-                    self.class_checkbox_frame,
+                init_inst_state = prev_inst_states.get(key, True)
+                iv = tk.BooleanVar(value=init_inst_state)
+                cb = ttk.Checkbutton(
+                    inst_frame,
                     text=label,
                     variable=iv,
                     command=self.on_visibility_change
-                ).pack(anchor="w", padx=20, fill="x")
+                )
+                cb.pack(anchor="w", pady=(0, 1))
                 self.instance_visibility[key] = iv
 
-            # — Prediction 인스턴스 토글
+            # 5) Prediction 인스턴스 체크박스 생성 (inst_frame 안에)
             pr_list = []
             for idx, ann in enumerate(self.current_pred_anns):
-                if ann['category_id'] != cat_id: continue
+                if ann['category_id'] != cat_id:
+                    continue
                 key = f"pred_{idx}"
                 num = self.instance_numbers.get(key, 0)
                 pr_list.append((num, key))
@@ -594,14 +658,19 @@ class AnnotatorGUI:
 
             for num, key in pr_list:
                 label = f"PR_{class_name}_{num}"
-                iv = tk.BooleanVar(value=True)
-                ttk.Checkbutton(
-                    self.class_checkbox_frame,
+                init_inst_state = prev_inst_states.get(key, True)
+                iv = tk.BooleanVar(value=init_inst_state)
+                cb = ttk.Checkbutton(
+                    inst_frame,
                     text=label,
                     variable=iv,
                     command=self.on_visibility_change
-                ).pack(anchor="w", padx=20, fill="x")
+                )
+                cb.pack(anchor="w", pady=(0, 1))
                 self.instance_visibility[key] = iv
+
+            # 6) 현재 클래스의 토글 상태를 저장 (백업되지 않은 신규 클래스라면 기본값)
+            self.class_expanded[cat_id] = is_expanded
 
     def _update_pr_class_selector(self):
         self.pr_class_combobox.set('')
@@ -762,6 +831,7 @@ class AnnotatorGUI:
                 self.current_gt_anns, filtered_preds_for_map, self.categories, iou_thresh_map
             )
             self.map_label.config(text=f"Current Image AP (IoU={iou_thresh_map:.2f}): {mean_ap:.4f}")
+            '''
             self.class_ap_text.config(state=tk.NORMAL)
             self.class_ap_text.delete(1.0, tk.END)
             if class_aps:
@@ -772,12 +842,15 @@ class AnnotatorGUI:
             else:
                 self.class_ap_text.insert(tk.END, "No AP data available.")
             self.class_ap_text.config(state=tk.DISABLED)
+            '''
         else:
             self.map_label.config(text=f"Current Image AP (IoU={iou_thresh_map:.2f}): N/A")
+            '''
             self.class_ap_text.config(state=tk.NORMAL)
             self.class_ap_text.delete(1.0, tk.END)
             self.class_ap_text.insert(tk.END, "GT or Predictions missing for AP.")
             self.class_ap_text.config(state=tk.DISABLED)
+            '''
 
         self.draw_pr_curve(iou_thresh_pr)
 
@@ -792,7 +865,9 @@ class AnnotatorGUI:
             self.iou_value_label.config(text=f"{self.iou_slider.get():.2f}")
 
             if self.current_image_id:
+                self._populate_visibility_checkboxes()
                 self.update_visualization_and_map()
+                
         except Exception as e:
             print(f"Error in on_threshold_change: {e}")
 
