@@ -124,7 +124,7 @@ class AnnotatorGUI:
         main_frame.columnconfigure(1, weight=1)
         main_frame.rowconfigure(0, weight=1)
 
-        # --- Left Frame: 이미지 목록 및 클래스 가시성 ---
+        # --- Left Frame: 이미지 목록 및 ap score, 클래스 가시성 ---
         left_frame = ttk.Frame(main_frame, padding="5")
         left_frame.grid(row=0, column=0, sticky="ns")
 
@@ -143,6 +143,14 @@ class AnnotatorGUI:
         self.explorer_canvas.bind('<Configure>', lambda e: self._populate_explorer_view()) # 캔버스 크기 변경 시 재구성
         # 스크롤 이벤트는 yscrollcommand를 통해 _on_explorer_scroll에서 처리되도록 할 것이므로 직접 바인딩은 제거
         # 대신, yscrollcommand가 호출될 때 _on_explorer_scroll이 트리거되도록 scrollbar의 command와 canvas의 yscrollcommand를 설정
+
+        # mAP Display
+        self.map_label = ttk.Label(left_frame, text="Current Image AP: N/A", font=("Arial", 10))
+        self.map_label.pack(anchor="w", pady=5)
+
+        # --- Dataset mAP Label ---
+        self.dataset_map_label = ttk.Label(left_frame, text="Dataset mAP: N/A", font=("Arial", 10))
+        self.dataset_map_label.pack(anchor="w", pady=(2, 10))
 
         # 클래스 가시성
         visibility_frame = ttk.LabelFrame(left_frame, text="Class Visibility", padding="5")
@@ -202,24 +210,6 @@ class AnnotatorGUI:
         btn_iou_plus = ttk.Button(self.iou_frame, text="+", width=2, command=lambda: self.adjust_slider(self.iou_slider, 0.05))
         btn_iou_plus.pack(side=tk.LEFT)
 
-        # mAP Display
-        self.map_label = ttk.Label(right_frame, text="Current Image AP: N/A", font=("Arial", 10))
-        self.map_label.pack(anchor="w", pady=5)
-
-        # --- Dataset mAP Label ---
-        self.dataset_map_label = ttk.Label(right_frame, text="Dataset mAP: N/A", font=("Arial", 10))
-        self.dataset_map_label.pack(anchor="w", pady=(2, 10))
-
-        '''
-        # Class AP Display
-        class_ap_frame = ttk.LabelFrame(right_frame, text="Class APs", padding="5")
-        class_ap_frame.pack(fill=tk.X, pady=5)
-        self.class_ap_text = tk.Text(class_ap_frame, height=8, width=30, state=tk.DISABLED, relief=tk.FLAT)
-        ap_scrollbar = ttk.Scrollbar(class_ap_frame, orient="vertical", command=self.class_ap_text.yview)
-        self.class_ap_text.config(yscrollcommand=ap_scrollbar.set)
-        ap_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        self.class_ap_text.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        '''
         # --- PR Curve Section ---
         pr_curve_frame = ttk.LabelFrame(right_frame, text="Precision-Recall Curve", padding="5")
         pr_curve_frame.pack(fill="both", expand=True, pady=5)
