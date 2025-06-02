@@ -182,34 +182,6 @@ class AnnotatorGUI:
         right_frame = ttk.Frame(main_frame, padding="5")
         right_frame.grid(row=0, column=2, sticky="ns")
 
-        ttk.Label(right_frame, text="Controls", font=("Arial", 11, "bold")).pack(anchor="w", pady=(0, 10))
-
-        # Confidence Threshold
-        self.conf_frame = ttk.LabelFrame(right_frame, text="Confidence Threshold", padding="5")
-        self.conf_frame.pack(fill=tk.X, pady=5)
-        self.conf_value_label = ttk.Label(self.conf_frame, text="0.50", width=5, anchor="e")
-        self.conf_value_label.pack(side=tk.RIGHT, padx=(5, 0))
-        btn_conf_minus = ttk.Button(self.conf_frame, text="-", width=2, command=lambda: self.adjust_slider(self.conf_slider, -0.01))
-        btn_conf_minus.pack(side=tk.LEFT)
-        self.conf_slider = ttk.Scale(self.conf_frame, from_=0.0, to=1.0, orient=tk.HORIZONTAL, command=self.on_threshold_change)
-        self.conf_slider.set(0.5)
-        self.conf_slider.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
-        btn_conf_plus = ttk.Button(self.conf_frame, text="+", width=2, command=lambda: self.adjust_slider(self.conf_slider, 0.01))
-        btn_conf_plus.pack(side=tk.LEFT)
-
-        # IoU Threshold
-        self.iou_frame = ttk.LabelFrame(right_frame, text="IoU Threshold (for mAP)", padding="5")
-        self.iou_frame.pack(fill=tk.X, pady=5)
-        self.iou_value_label = ttk.Label(self.iou_frame, text="0.50", width=5, anchor="e")
-        self.iou_value_label.pack(side=tk.RIGHT, padx=(5, 0))
-        btn_iou_minus = ttk.Button(self.iou_frame, text="-", width=2, command=lambda: self.adjust_slider(self.iou_slider, -0.05))
-        btn_iou_minus.pack(side=tk.LEFT)
-        self.iou_slider = ttk.Scale(self.iou_frame, from_=0.05, to=0.95, orient=tk.HORIZONTAL, command=self.on_threshold_change)
-        self.iou_slider.set(0.5)
-        self.iou_slider.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
-        btn_iou_plus = ttk.Button(self.iou_frame, text="+", width=2, command=lambda: self.adjust_slider(self.iou_slider, 0.05))
-        btn_iou_plus.pack(side=tk.LEFT)
-
         # --- PR Curve Section ---
         pr_curve_frame = ttk.LabelFrame(right_frame, text="Precision-Recall Curve", padding="5")
         pr_curve_frame.pack(fill="both", expand=True, pady=5)
@@ -237,15 +209,7 @@ class AnnotatorGUI:
         self.pr_fig.tight_layout()
         self.pr_canvas_widget.draw()
 
-        # Edit Label Button
-        self.edit_label_button = ttk.Button(right_frame, text="Edit Selected Label", command=self.edit_selected_label, state=tk.DISABLED)
-        self.edit_label_button.pack(fill=tk.X, pady=5)
-
-        # Save Annotations Button
-        self.save_button = ttk.Button(right_frame, text="Save Modified Annotations", command=self.save_annotations, state=tk.DISABLED)
-        self.save_button.pack(fill=tk.X, pady=5)
-
-        # --- Center Frame: 이미지 및 Annotation 표시 ---
+        # --- Center Frame: 이미지 및 Annotation, control 표시 ---
         center_frame = ttk.Frame(main_frame, padding="5")
         center_frame.grid(row=0, column=1, sticky="nsew")
         center_frame.columnconfigure(0, weight=1)
@@ -254,6 +218,49 @@ class AnnotatorGUI:
         self.canvas = InteractiveCanvas(center_frame, bg="lightgrey")
         self.canvas.grid(row=0, column=0, sticky="nsew")
         self.canvas.set_annotation_update_callback(self.on_annotation_update)
+
+        controls_frame = ttk.Frame(center_frame)
+        controls_frame.grid(row=1, column=0, pady=10)
+
+        # Confidence Threshold
+        self.conf_frame = ttk.LabelFrame(controls_frame, text="Confidence Threshold", padding="5")
+        self.conf_frame.pack(fill=tk.X, pady=2)
+        self.conf_value_label = ttk.Label(self.conf_frame, text="0.50", width=5, anchor="e")
+        self.conf_value_label.pack(side=tk.RIGHT, padx=(5, 0))
+        btn_conf_minus = ttk.Button(self.conf_frame, text="-", width=2, command=lambda: self.adjust_slider(self.conf_slider, -0.01))
+        btn_conf_minus.pack(side=tk.LEFT)
+        self.conf_slider = ttk.Scale(self.conf_frame, from_=0.0, to=1.0, orient=tk.HORIZONTAL, length=400, command=self.on_threshold_change)
+        self.conf_slider.set(0.5)
+        self.conf_slider.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        btn_conf_plus = ttk.Button(self.conf_frame, text="+", width=2, command=lambda: self.adjust_slider(self.conf_slider, 0.01))
+        btn_conf_plus.pack(side=tk.LEFT)
+
+        # IoU Threshold
+        self.iou_frame = ttk.LabelFrame(controls_frame, text="IoU Threshold", padding="5")
+        self.iou_frame.pack(fill=tk.X, pady=2)
+        self.iou_value_label = ttk.Label(self.iou_frame, text="0.50", width=5, anchor="e")
+        self.iou_value_label.pack(side=tk.RIGHT, padx=(5, 0))
+        btn_iou_minus = ttk.Button(self.iou_frame, text="-", width=2, command=lambda: self.adjust_slider(self.iou_slider, -0.05))
+        btn_iou_minus.pack(side=tk.LEFT)
+        self.iou_slider = ttk.Scale(self.iou_frame, from_=0.05, to=0.95, orient=tk.HORIZONTAL, length=400, command=self.on_threshold_change)
+        self.iou_slider.set(0.5)
+        self.iou_slider.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        btn_iou_plus = ttk.Button(self.iou_frame, text="+", width=2, command=lambda: self.adjust_slider(self.iou_slider, 0.05))
+        btn_iou_plus.pack(side=tk.LEFT)
+
+        # Edit Selected Label 버튼
+        self.edit_label_button = ttk.Button(controls_frame,
+                                            text="Edit Selected Label",
+                                            command=self.edit_selected_label,
+                                            state=tk.DISABLED)
+        self.edit_label_button.pack(fill=tk.X, pady=2)
+
+        # Save Modified Annotations 버튼
+        self.save_button = ttk.Button(controls_frame,
+                                      text="Save Modified Annotations",
+                                      command=self.save_annotations,
+                                      state=tk.DISABLED)
+        self.save_button.pack(fill=tk.X, pady=2)
 
     def _on_explorer_scroll(self, *args):
         # Canvas의 yview를 먼저 호출하여 스크롤을 적용
