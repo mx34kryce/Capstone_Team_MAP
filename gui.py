@@ -110,23 +110,34 @@ class AnnotatorGUI:
                                                state=tk.DISABLED)
         self.calc_dataset_map_btn.pack(side=tk.LEFT, padx=5)
 
-        # --- Bottom Frame ---
-        bottom_frame = ttk.Frame(self.master, padding="5 0 5 5")
-        bottom_frame.pack(side=tk.BOTTOM, fill=tk.X)
-        self.status_label = ttk.Label(bottom_frame, text="Ready", anchor="w")
-        self.status_label.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
-        self.progress_bar = ttk.Progressbar(bottom_frame, orient=tk.HORIZONTAL, length=100, mode='determinate')
-        self.progress_bar.pack(side=tk.RIGHT, padx=5)
+        # ▶ Top Frame 우측에 Status 레이블 & ProgressBar 배치
+        status_frame = ttk.Frame(top_frame)
+        status_frame.pack(side=tk.RIGHT)
+
+        self.status_label = ttk.Label(status_frame, text="Status: Ready")
+        self.status_label.pack(side=tk.LEFT, padx=(0, 10))
+
+        self.progress_bar = ttk.Progressbar(status_frame,
+                                            orient=tk.HORIZONTAL,
+                                            length=150,
+                                            mode='determinate')
+        self.progress_bar.pack(side=tk.LEFT, padx=(0, 10))
 
         # --- Main Frame (Left, Center, Right 분할) ---
         main_frame = ttk.Frame(self.master, padding="5 5 5 5")
         main_frame.pack(fill="both", expand=True)
-        main_frame.columnconfigure(1, weight=1)
-        main_frame.rowconfigure(0, weight=1)
+        main_frame.columnconfigure(0, weight=0)   # Left frame (고정 폭)
+        main_frame.columnconfigure(1, weight=1)   # Center frame (확장)
+        main_frame.columnconfigure(2, weight=1)   # Right frame (확장)
+        main_frame.rowconfigure(0, weight=1)      # Row 0: 이미지 + PR Curve 영역 (확장)
+        main_frame.rowconfigure(1, weight=0)      # Row 1: 컨트롤 영역 (고정 높이)
+        main_frame.rowconfigure(2, weight=0)    # row 2: 슬라이더·버튼 + PR Curve
+        main_frame.rowconfigure(3, weight=0)
+        
 
         # --- Left Frame: 이미지 목록 및 ap score, 클래스 가시성 ---
         left_frame = ttk.Frame(main_frame, padding="5")
-        left_frame.grid(row=0, column=0, sticky="ns")
+        left_frame.grid(row=0, column=0, rowspan=4, sticky="ns")
 
         # 이미지 목록 (캔버스 기반 탐색기 뷰로 변경)
         ttk.Label(left_frame, text="Images:").pack(anchor="w")
@@ -143,14 +154,6 @@ class AnnotatorGUI:
         self.explorer_canvas.bind('<Configure>', lambda e: self._populate_explorer_view()) # 캔버스 크기 변경 시 재구성
         # 스크롤 이벤트는 yscrollcommand를 통해 _on_explorer_scroll에서 처리되도록 할 것이므로 직접 바인딩은 제거
         # 대신, yscrollcommand가 호출될 때 _on_explorer_scroll이 트리거되도록 scrollbar의 command와 canvas의 yscrollcommand를 설정
-
-        # mAP Display
-        self.map_label = ttk.Label(left_frame, text="Current Image AP: N/A", font=("Arial", 10))
-        self.map_label.pack(anchor="w", pady=5)
-
-        # --- Dataset mAP Label ---
-        self.dataset_map_label = ttk.Label(left_frame, text="Dataset mAP: N/A", font=("Arial", 10))
-        self.dataset_map_label.pack(anchor="w", pady=(2, 10))
 
         # 클래스 가시성
         visibility_frame = ttk.LabelFrame(left_frame, text="Class Visibility", padding="5")
@@ -178,13 +181,14 @@ class AnnotatorGUI:
         vis_canvas.bind("<Configure>", _configure_vis_canvas)
         self.class_checkbox_frame.bind("<Configure>", _configure_checkbox_frame)
 
-        # --- Right Frame: 컨트롤, 정보, PR Curve ---
+        # --- Right Frame: PR Curve ---
         right_frame = ttk.Frame(main_frame, padding="5")
-        right_frame.grid(row=0, column=2, sticky="ns")
+        right_frame.grid(row=1, column=2, rowspan=3, sticky="nsew")
+        right_frame.columnconfigure(0, weight=1)
 
         # --- PR Curve Section ---
         pr_curve_frame = ttk.LabelFrame(right_frame, text="Precision-Recall Curve", padding="5")
-        pr_curve_frame.pack(fill="both", expand=True, pady=5)
+        pr_curve_frame.grid(row=0, column=0, sticky="se", padx=5, pady=5)
 
         # PR Curve Class Selector
         pr_class_select_frame = ttk.Frame(pr_curve_frame)
@@ -196,7 +200,7 @@ class AnnotatorGUI:
         self.pr_class_combobox.bind("<<ComboboxSelected>>", self.on_pr_class_select)
 
         # Matplotlib Canvas Placeholder
-        self.pr_fig = Figure(figsize=(4, 3), dpi=100)
+        self.pr_fig = Figure(figsize=(3, 2.5), dpi=100)
         self.pr_ax = self.pr_fig.add_subplot(111)
         self.pr_canvas_widget = FigureCanvasTkAgg(self.pr_fig, master=pr_curve_frame)
         self.pr_canvas_widget.get_tk_widget().pack(fill="both", expand=True)
@@ -211,7 +215,7 @@ class AnnotatorGUI:
 
         # --- Center Frame: 이미지 및 Annotation, control 표시 ---
         center_frame = ttk.Frame(main_frame, padding="5")
-        center_frame.grid(row=0, column=1, sticky="nsew")
+        center_frame.grid(row=0, column=1, columnspan=2, sticky="nsew")
         center_frame.columnconfigure(0, weight=1)
         center_frame.rowconfigure(0, weight=1)
 
@@ -219,9 +223,15 @@ class AnnotatorGUI:
         self.canvas.grid(row=0, column=0, sticky="nsew")
         self.canvas.set_annotation_update_callback(self.on_annotation_update)
 
-        controls_frame = ttk.Frame(center_frame)
-        controls_frame.grid(row=1, column=0, pady=10)
+        # ▶ AP 레이블(중앙 슬라이더 바로 위)
+        self.map_label = ttk.Label(main_frame, text="Current Image AP: N/A", font=("Arial", 10))
+        self.map_label.grid(row=1, column=1, sticky="w", padx=5, pady=(1, 0))
 
+        self.dataset_map_label = ttk.Label(main_frame, text="Dataset mAP: N/A", font=("Arial", 10))
+        self.dataset_map_label.grid(row=2, column=1, sticky="w", padx=5, pady=(1, 0))
+        
+        controls_frame = ttk.Frame(main_frame)
+        controls_frame.grid(row=3, column=1, pady=(3, 0), sticky="e")
         # Confidence Threshold
         self.conf_frame = ttk.LabelFrame(controls_frame, text="Confidence Threshold", padding="5")
         self.conf_frame.pack(fill=tk.X, pady=2)
