@@ -58,7 +58,7 @@ class AnnotatorGUI:
         self.explorer_scrollbar_y = None
         self.all_image_ids_ordered = [] # 정렬된 이미지 ID 목록
         self.canvas_item_map = {} # image_id -> {'thumb': canvas_id, 'text': canvas_id, 'bg': canvas_id}
-        self.item_height_in_explorer = self.thumbnail_size[1] + 20 # 각 아이템의 높이 (썸네일 + 텍스트 + 패딩)
+        self.item_height_in_explorer = self.thumbnail_size[1] + 40 # 각 아이템의 높이 (썸네일 + 텍스트 + 메타데이터 + 패딩)
         self.item_padding = 2
         self.selected_explorer_image_id = None
         self.style = None # ttk.Style 객체를 저장할 인스턴스 변수
@@ -395,18 +395,50 @@ class AnnotatorGUI:
                 )
                 self.canvas_item_map[image_id_str]['thumb'] = thumb_item
 
+                # 파일명과 메타데이터 정보를 포함한 텍스트 생성
                 filename = self.image_metadata.get(image_id, {}).get("filename", f"ID: {image_id}")
+                metadata = self.image_metadata.get(image_id, {})
+                ap_score = metadata.get("ap", "N/A")
+                class_count = metadata.get("classes", 0)
+                instance_count = metadata.get("instances", 0)
+                
+                # AP score를 숫자로 포맷팅 (N/A가 아닌 경우)
+                if ap_score != "N/A" and isinstance(ap_score, (int, float)):
+                    ap_display = f"{ap_score:.3f}"
+                else:
+                    ap_display = str(ap_score)
+                
+                # 멀티라인 텍스트 생성
+                display_text = f"{filename}\nAP: {ap_display} | Classes: {class_count} | Instances: {instance_count}"
+                
                 text_item = self.explorer_canvas.create_text(
                     self.item_padding + self.thumbnail_size[0] + 10, 
                     y_pos + (self.item_height_in_explorer - self.item_padding*2) / 2,
-                    text=filename, anchor="w", fill=text_color,
+                    text=display_text, anchor="w", fill=text_color,
                     width=canvas_width - (self.thumbnail_size[0] + 20), # 텍스트 줄바꿈 너비
                     tags=("item_text", f"item_text_{image_id_str}")
                 )
                 self.canvas_item_map[image_id_str]['text'] = text_item
             else: # 이미 아이템이 존재하면 색상 등 업데이트
                 self.explorer_canvas.itemconfig(self.canvas_item_map[image_id_str]['bg'], fill=bg_color)
-                self.explorer_canvas.itemconfig(self.canvas_item_map[image_id_str]['text'], fill=text_color)
+                
+                # 텍스트 내용도 업데이트 (메타데이터가 변경될 수 있음)
+                filename = self.image_metadata.get(image_id, {}).get("filename", f"ID: {image_id}")
+                metadata = self.image_metadata.get(image_id, {})
+                ap_score = metadata.get("ap", "N/A")
+                class_count = metadata.get("classes", 0)
+                instance_count = metadata.get("instances", 0)
+                
+                if ap_score != "N/A" and isinstance(ap_score, (int, float)):
+                    ap_display = f"{ap_score:.3f}"
+                else:
+                    ap_display = str(ap_score)
+                
+                display_text = f"{filename}\nAP: {ap_display} | Classes: {class_count} | Instances: {instance_count}"
+                
+                self.explorer_canvas.itemconfig(self.canvas_item_map[image_id_str]['text'], 
+                                               fill=text_color, text=display_text)
+                
                 # 썸네일이 플레이스홀더였다가 실제 이미지로 변경된 경우 업데이트
                 current_thumb_on_canvas = self.explorer_canvas.itemcget(self.canvas_item_map[image_id_str]['thumb'], "image")
                 new_thumb_obj = self._load_thumbnail(image_id_str) # 캐시에서 가져오거나 로드
@@ -534,6 +566,7 @@ class AnnotatorGUI:
            - 이전 on/off 상태 유지
            - 이전 토글(펼침/접힘) 상태 유지
            - 클래스별로 컨테이너 프레임을 만들어 인스턴스가 해당 클래스 바로 아래에 붙도록 함
+           - 현재 confidence threshold에 따라 필터링된 예측만 표시
         """
         # 1) 기존 체크박스 및 토글 상태 백업
         prev_class_states    = {cat_id: var.get() for cat_id, var in self.class_visibility.items()}
@@ -551,11 +584,18 @@ class AnnotatorGUI:
         if not (self.current_gt_anns or self.current_pred_anns):
             return
 
-        # 3) 화면에 등장하는 클래스 ID들을 이름순으로 정렬
+        # 현재 confidence threshold로 예측 필터링
+        conf_thresh = self.conf_slider.get()
+        filtered_pred_anns = [
+            pred for pred in self.current_pred_anns 
+            if pred.get('score', 0.0) >= conf_thresh
+        ]
+
+        # 3) 화면에 등장하는 클래스 ID들을 이름순으로 정렬 (필터링된 예측 기준)
         present_cats = {
             ann['category_id'] for ann in self.current_gt_anns
         } | {
-            ann['category_id'] for ann in self.current_pred_anns
+            ann['category_id'] for ann in filtered_pred_anns  # 필터링된 예측 사용
         }
         sorted_categories = sorted(
             ((cid, info) for cid, info in self.categories.items() if cid in present_cats),
@@ -570,7 +610,7 @@ class AnnotatorGUI:
 
             # 3-2) 해당 클래스의 AP 계산 (현재 IoU & Confidence 슬라이더 값 기준)
             gt_cat  = [ann for ann in self.current_gt_anns   if ann['category_id'] == cat_id]
-            pr_cat  = [ann for ann in self.current_pred_anns if ann['category_id'] == cat_id and ann.get('score', 0.0) >= self.conf_slider.get()]
+            pr_cat  = [ann for ann in filtered_pred_anns if ann['category_id'] == cat_id]  # 이미 필터링된 예측 사용
             iou_thr = self.iou_slider.get()
             prec, rec, _ = map_calculator.get_pr_arrays(
                 gt_cat, pr_cat,
@@ -615,7 +655,7 @@ class AnnotatorGUI:
             # 4-5) 클래스 체크박스 생성: 이전 on/off 상태 유지, 없으면 기본 True
             init_class_state = prev_class_states.get(cat_id, True)
             class_var = tk.BooleanVar(value=init_class_state)
-            label_text = f"{class_name} (AP={ap_value:.4f})"
+            label_text = f"{class_name} (AP={ap_value:.4f}, Conf≥{conf_thresh:.2f})"
             class_cb = ttk.Checkbutton(
                 class_frame,
                 text=label_text,
@@ -653,10 +693,13 @@ class AnnotatorGUI:
                 self.instance_visibility[key] = iv
 
             # ─────────────────────────────────────────────────────────────────────
-            # 6) Prediction 인스턴스 체크박스 생성 (inst_frame 안에)
+            # 6) Prediction 인스턴스 체크박스 생성 (inst_frame 안에) - 필터링된 예측만 표시
             pr_list = []
             for idx, ann in enumerate(self.current_pred_anns):
                 if ann['category_id'] != cat_id:
+                    continue
+                # confidence threshold 체크 - 필터링된 예측만 체크박스로 표시
+                if ann.get('score', 0.0) < conf_thresh:
                     continue
                 key = f"pred_{idx}"
                 num = self.instance_numbers.get(key, 0)
@@ -685,10 +728,29 @@ class AnnotatorGUI:
             self.pr_class_combobox['values'] = []
             return
 
-        class_names = ["Overall"] + sorted([cat['name'] for cat_id, cat in self.categories.items()])
+        # 현재 이미지의 GT 어노테이션에 포함된 클래스만 필터링
+        if self.current_gt_anns:
+            gt_class_ids = {ann['category_id'] for ann in self.current_gt_anns}
+            available_classes = [
+                self.categories[cat_id]['name'] 
+                for cat_id in gt_class_ids 
+                if cat_id in self.categories
+            ]
+            class_names = ["Overall"] + sorted(available_classes)
+        else:
+            # GT 어노테이션이 없는 경우 Overall만 표시
+            class_names = ["Overall"]
+        
         self.pr_class_combobox['values'] = class_names
-        self.pr_class_combobox.set("Overall")
-        self.selected_pr_class_id = "Overall"
+        
+        # 기존 선택이 새로운 목록에 있는지 확인
+        current_selection = self.pr_class_var.get()
+        if current_selection not in class_names:
+            self.pr_class_combobox.set("Overall")
+            self.selected_pr_class_id = "Overall"
+        else:
+            # 기존 선택 유지
+            self.pr_class_var.set(current_selection)
 
     def on_visibility_change(self):
         self.update_visualization_and_map()
@@ -872,6 +934,8 @@ class AnnotatorGUI:
             self.iou_value_label.config(text=f"{self.iou_slider.get():.2f}")
 
             if self.current_image_id:
+                # threshold 변경 시 체크박스를 재구성하여 필터링된 객체를 반영
+                self._compute_instance_numbers()
                 self._populate_visibility_checkboxes()
                 self.update_visualization_and_map()
                 
@@ -917,10 +981,17 @@ class AnnotatorGUI:
             return
 
         calc_cat_id = None if self.selected_pr_class_id == "Overall" else self.selected_pr_class_id
+        
+        # confidence threshold 기반 예측 필터링 추가
+        conf_thresh = self.conf_slider.get()
+        filtered_pred_anns = [
+            pred for pred in self.current_pred_anns 
+            if pred.get('score', 0.0) >= conf_thresh
+        ]
 
         prec, rec, num_gt = map_calculator.get_pr_arrays(
             self.current_gt_anns,
-            self.current_pred_anns,
+            filtered_pred_anns,  # 필터링된 예측 전달
             category_id=calc_cat_id,
             iou_threshold=iou_threshold
         )
@@ -931,13 +1002,14 @@ class AnnotatorGUI:
 
             if calc_cat_id is not None:
                 ap = map_calculator.calculate_ap(rec, prec)
-                title = f"PR Curve: {self.categories[calc_cat_id]['name']} (AP={ap:.3f})"
+                title = f"PR Curve: {self.categories[calc_cat_id]['name']} (AP={ap:.3f}, Conf≥{conf_thresh:.2f})"
             else:
-                title = f"PR Curve: Overall (IoU={iou_threshold:.2f})"
+                title = f"PR Curve: Overall (IoU={iou_threshold:.2f}, Conf≥{conf_thresh:.2f})"
 
             self.pr_ax.set_title(title, fontsize=9)
         else:
-            self.pr_ax.set_title(f"PR Curve: {self.pr_class_var.get()} (No Data)", fontsize=9)
+            title_suffix = f"(Conf≥{conf_thresh:.2f}, No Data)"
+            self.pr_ax.set_title(f"PR Curve: {self.pr_class_var.get()} {title_suffix}", fontsize=9)
 
         self.pr_ax.set_xlabel("Recall")
         self.pr_ax.set_ylabel("Precision")
