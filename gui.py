@@ -104,7 +104,7 @@ class AnnotatorGUI:
         btn_load_img_dir = ttk.Button(top_frame, text="Select Image Directory", command=self.select_image_dir)
         btn_load_img_dir.pack(side=tk.LEFT, padx=5)
 
-        btn_reset = ttk.Button(top_frame, text="Reset Annotations", command=self.reset_annotations, state=tk.DISABLED)
+        btn_reset = ttk.Button(top_frame, text="Reset Bbox", command=self.reset_annotations, state=tk.DISABLED)
         btn_reset.pack(side=tk.LEFT, padx=5)
         self.reset_btn = btn_reset
 
@@ -113,23 +113,37 @@ class AnnotatorGUI:
                                                state=tk.DISABLED)
         self.calc_dataset_map_btn.pack(side=tk.LEFT, padx=5)
 
-        # --- Bottom Frame ---
-        bottom_frame = ttk.Frame(self.master, padding="5 0 5 5")
-        bottom_frame.pack(side=tk.BOTTOM, fill=tk.X)
-        self.status_label = ttk.Label(bottom_frame, text="Ready", anchor="w")
-        self.status_label.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
-        self.progress_bar = ttk.Progressbar(bottom_frame, orient=tk.HORIZONTAL, length=100, mode='determinate')
-        self.progress_bar.pack(side=tk.RIGHT, padx=5)
+        help_button = ttk.Button(top_frame,
+                                text="Help",
+                                command=self.show_help)
+        help_button.pack(side=tk.LEFT, padx=5)
+
+        # ▶ Top Frame 우측에 Status 레이블 & ProgressBar 배치
+        status_frame = ttk.Frame(top_frame)
+        status_frame.pack(side=tk.RIGHT)
+
+        self.status_label = ttk.Label(status_frame, text="Status: Ready")
+        self.status_label.pack(side=tk.LEFT, padx=(0, 10))
+
+        self.progress_bar = ttk.Progressbar(status_frame,
+                                            orient=tk.HORIZONTAL,
+                                            length=150,
+                                            mode='determinate')
+        self.progress_bar.pack(side=tk.LEFT, padx=(0, 10))
 
         # --- Main Frame (Left, Center, Right 분할) ---
         main_frame = ttk.Frame(self.master, padding="5 5 5 5")
         main_frame.pack(fill="both", expand=True)
-        main_frame.columnconfigure(1, weight=1)
-        main_frame.rowconfigure(0, weight=1)
+        main_frame.columnconfigure(0, weight=0)   # Left frame (고정 폭)
+        main_frame.columnconfigure(1, weight=1)   # Center frame (확장)
+        main_frame.columnconfigure(2, weight=1)   # Right frame (확장)
+        main_frame.rowconfigure(0, weight=1)      
+        main_frame.rowconfigure(1, weight=0)       
+        
 
-        # --- Left Frame: 이미지 목록 및 클래스 가시성 ---
+        # --- Left Frame: 이미지 목록 및 ap score, 클래스 가시성 ---
         left_frame = ttk.Frame(main_frame, padding="5")
-        left_frame.grid(row=0, column=0, sticky="ns")
+        left_frame.grid(row=0, column=0, rowspan=2, sticky="ns")
 
         # 이미지 목록 (캔버스 기반 탐색기 뷰로 변경)
         ttk.Label(left_frame, text="Images:").pack(anchor="w")
@@ -172,102 +186,25 @@ class AnnotatorGUI:
         self.explorer_canvas.bind("<Button-4>", self._on_mousewheel_explorer)   # Linux (scroll up)
         self.explorer_canvas.bind("<Button-5>", self._on_mousewheel_explorer)   # Linux (scroll down)
 
-        # 클래스 가시성
-        visibility_frame = ttk.LabelFrame(left_frame, text="Class Visibility", padding="5")
-        visibility_frame.pack(fill="both", expand=True, pady=5)
-
-        # 현재 테마의 TFrame 배경색을 가져옵니다.
-        frame_bg_color = self.style.lookup('TFrame', 'background')
-
-        vis_canvas = tk.Canvas(visibility_frame, borderwidth=0, background=frame_bg_color, highlightthickness=0)
-        self.class_checkbox_frame = ttk.Frame(vis_canvas, padding="2") # ttk.Frame은 기본적으로 테마의 배경색을 따릅니다.
-        vis_scrollbar = ttk.Scrollbar(visibility_frame, orient="vertical", command=vis_canvas.yview)        
-        vis_canvas.configure(yscrollcommand=vis_scrollbar.set)
-
-        vis_scrollbar.pack(side="right", fill="y")
-        vis_canvas.pack(side="left", fill="both", expand=True)
-        vis_canvas_window = vis_canvas.create_window((0, 0), window=self.class_checkbox_frame, anchor="nw")
-
-        def _configure_vis_canvas(event):
-            vis_canvas.configure(scrollregion=vis_canvas.bbox("all"))
-            vis_canvas.itemconfig(vis_canvas_window, width=event.width)
-
-        def _configure_checkbox_frame(event):
-            vis_canvas.configure(scrollregion=vis_canvas.bbox("all"))
-
-        vis_canvas.bind("<Configure>", _configure_vis_canvas)
-        self.class_checkbox_frame.bind("<Configure>", _configure_checkbox_frame)
-
-        # 클래스 가시성 캔버스에 마우스 휠 바인딩 추가
-        vis_canvas.bind("<MouseWheel>", lambda event: self._on_mousewheel_generic(event, vis_canvas)) # Windows
-        vis_canvas.bind("<Button-4>", lambda event: self._on_mousewheel_generic(event, vis_canvas))   # Linux (scroll up)
-        vis_canvas.bind("<Button-5>", lambda event: self._on_mousewheel_generic(event, vis_canvas))   # Linux (scroll down)
-
-        # --- Right Frame: 컨트롤, 정보, PR Curve ---
-        right_frame = ttk.Frame(main_frame, padding="5")
-        right_frame.grid(row=0, column=2, sticky="ns")
-
-        ttk.Label(right_frame, text="Controls", font=("Arial", 11, "bold")).pack(anchor="w", pady=(0, 10))
-
-        # Confidence Threshold
-        self.conf_frame = ttk.LabelFrame(right_frame, text="Confidence Threshold", padding="5")
-        self.conf_frame.pack(fill=tk.X, pady=5)
-        self.conf_value_label = ttk.Label(self.conf_frame, text="0.50", width=5, anchor="e")
-        self.conf_value_label.pack(side=tk.RIGHT, padx=(5, 0))
-        btn_conf_minus = ttk.Button(self.conf_frame, text="-", width=2, command=lambda: self.adjust_slider(self.conf_slider, -0.01))
-        btn_conf_minus.pack(side=tk.LEFT)
-        self.conf_slider = ttk.Scale(self.conf_frame, from_=0.0, to=1.0, orient=tk.HORIZONTAL, command=self.on_threshold_change)
-        self.conf_slider.set(0.5)
-        self.conf_slider.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
-        btn_conf_plus = ttk.Button(self.conf_frame, text="+", width=2, command=lambda: self.adjust_slider(self.conf_slider, 0.01))
-        btn_conf_plus.pack(side=tk.LEFT)
-
-        # IoU Threshold
-        self.iou_frame = ttk.LabelFrame(right_frame, text="IoU Threshold (for mAP)", padding="5")
-        self.iou_frame.pack(fill=tk.X, pady=5)
-        self.iou_value_label = ttk.Label(self.iou_frame, text="0.50", width=5, anchor="e")
-        self.iou_value_label.pack(side=tk.RIGHT, padx=(5, 0))
-        btn_iou_minus = ttk.Button(self.iou_frame, text="-", width=2, command=lambda: self.adjust_slider(self.iou_slider, -0.05))
-        btn_iou_minus.pack(side=tk.LEFT)
-        self.iou_slider = ttk.Scale(self.iou_frame, from_=0.05, to=0.95, orient=tk.HORIZONTAL, command=self.on_threshold_change)
-        self.iou_slider.set(0.5)
-        self.iou_slider.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
-        btn_iou_plus = ttk.Button(self.iou_frame, text="+", width=2, command=lambda: self.adjust_slider(self.iou_slider, 0.05))
-        btn_iou_plus.pack(side=tk.LEFT)
-
-        # mAP Display
-        self.map_label = ttk.Label(right_frame, text="Current Image AP: N/A", font=("Arial", 10))
-        self.map_label.pack(anchor="w", pady=5)
-
-        # --- Dataset mAP Label ---
-        self.dataset_map_label = ttk.Label(right_frame, text="Dataset mAP: N/A", font=("Arial", 10))
-        self.dataset_map_label.pack(anchor="w", pady=(2, 10))
-
-        '''
-        # Class AP Display
-        class_ap_frame = ttk.LabelFrame(right_frame, text="Class APs", padding="5")
-        class_ap_frame.pack(fill=tk.X, pady=5)
-        self.class_ap_text = tk.Text(class_ap_frame, height=8, width=30, state=tk.DISABLED, relief=tk.FLAT)
-        ap_scrollbar = ttk.Scrollbar(class_ap_frame, orient="vertical", command=self.class_ap_text.yview)
-        self.class_ap_text.config(yscrollcommand=ap_scrollbar.set)
-        ap_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        self.class_ap_text.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        '''
-        # --- PR Curve Section ---
-        pr_curve_frame = ttk.LabelFrame(right_frame, text="Precision-Recall Curve", padding="5")
+        pr_curve_frame = ttk.LabelFrame(left_frame, text="Precision-Recall Curve", padding="5")
         pr_curve_frame.pack(fill="both", expand=True, pady=5)
 
-        # PR Curve Class Selector
+        # PR Curve용 클래스 선택 콤보박스
         pr_class_select_frame = ttk.Frame(pr_curve_frame)
         pr_class_select_frame.pack(fill=tk.X, pady=(0, 5))
         ttk.Label(pr_class_select_frame, text="Class:").pack(side=tk.LEFT, padx=(0, 5))
         self.pr_class_var = tk.StringVar()
-        self.pr_class_combobox = ttk.Combobox(pr_class_select_frame, textvariable=self.pr_class_var, state="readonly", width=25)
+        self.pr_class_combobox = ttk.Combobox(
+            pr_class_select_frame,
+            textvariable=self.pr_class_var,
+            state="readonly",
+            width=25
+        )
         self.pr_class_combobox.pack(side=tk.LEFT, fill=tk.X, expand=True)
         self.pr_class_combobox.bind("<<ComboboxSelected>>", self.on_pr_class_select)
 
-        # Matplotlib Canvas Placeholder
-        self.pr_fig = Figure(figsize=(4, 3), dpi=100)
+        # Matplotlib 캔버스(왼쪽 PR Curve)
+        self.pr_fig = Figure(figsize=(3, 2.5), dpi=100)
         self.pr_ax = self.pr_fig.add_subplot(111)
         self.pr_canvas_widget = FigureCanvasTkAgg(self.pr_fig, master=pr_curve_frame)
         self.pr_canvas_widget.get_tk_widget().pack(fill="both", expand=True)
@@ -280,23 +217,151 @@ class AnnotatorGUI:
         self.pr_fig.tight_layout()
         self.pr_canvas_widget.draw()
 
-        # Edit Label Button
-        self.edit_label_button = ttk.Button(right_frame, text="Edit Selected Label", command=self.edit_selected_label, state=tk.DISABLED)
-        self.edit_label_button.pack(fill=tk.X, pady=5)
+        # --- Right Frame: PR Curve ---
+        right_frame = ttk.Frame(main_frame, padding="5")
+        right_frame.grid(row=1, column=2, sticky="nsew")
+        right_frame.columnconfigure(0, weight=1)
 
-        # Save Annotations Button
-        self.save_button = ttk.Button(right_frame, text="Save Modified Annotations", command=self.save_annotations, state=tk.DISABLED)
-        self.save_button.pack(fill=tk.X, pady=5)
+        visibility_frame = ttk.LabelFrame(right_frame, text="Class Visibility", padding="5")
+        visibility_frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=(0,5))
 
-        # --- Center Frame: 이미지 및 Annotation 표시 ---
+        # 현재 테마의 TFrame 배경색을 가져옴
+        frame_bg_color = self.style.lookup('TFrame', 'background')
+
+        vis_canvas = tk.Canvas(
+            visibility_frame,
+            borderwidth=0,
+            background=frame_bg_color,
+            highlightthickness=0,
+            height=240
+        )
+        self.class_checkbox_frame = ttk.Frame(vis_canvas, padding="2")
+
+        vis_scrollbar = ttk.Scrollbar(
+            visibility_frame,
+            orient="vertical",
+            command=vis_canvas.yview
+        )
+        vis_canvas.configure(yscrollcommand=vis_scrollbar.set)
+
+        vis_scrollbar.pack(side="right", fill="y")
+        vis_canvas.pack(side="left", fill="both", expand=False) 
+
+        vis_canvas_window = vis_canvas.create_window((0, 0), window=self.class_checkbox_frame, anchor="nw")
+
+        def _configure_vis_canvas(event):
+            vis_canvas.configure(scrollregion=vis_canvas.bbox("all"))
+            vis_canvas.itemconfig(vis_canvas_window, width=event.width)
+
+        def _configure_checkbox_frame(event):
+            vis_canvas.configure(scrollregion=vis_canvas.bbox("all"))
+
+        vis_canvas.bind("<Configure>", _configure_vis_canvas)
+        self.class_checkbox_frame.bind("<Configure>", _configure_checkbox_frame)
+
+        # --- Center Frame: 이미지 및 Annotation, control 표시 ---
         center_frame = ttk.Frame(main_frame, padding="5")
-        center_frame.grid(row=0, column=1, sticky="nsew")
+        center_frame.grid(row=0, column=1, columnspan=2, sticky="nsew")
         center_frame.columnconfigure(0, weight=1)
         center_frame.rowconfigure(0, weight=1)
 
         self.canvas = InteractiveCanvas(center_frame, bg="lightgrey")
         self.canvas.grid(row=0, column=0, sticky="nsew")
         self.canvas.set_annotation_update_callback(self.on_annotation_update)
+
+        controls_container = ttk.Frame(main_frame)
+        controls_container.grid(row=1, column=1, sticky="nsew", padx=(30,5), pady=(0,12))
+
+        # ▶ AP 레이블(중앙 슬라이더 바로 위)
+        self.map_label = ttk.Label(controls_container, text="Current Image AP: N/A", font=("Arial", 10))
+        self.map_label.pack(anchor="w", pady=(0, 2))
+
+        self.dataset_map_label = ttk.Label(controls_container, text="Dataset mAP: N/A", font=("Arial", 10))
+        self.dataset_map_label.pack(anchor="w", pady=(0, 6))
+       
+        # ▶ Confidence Threshold (conf_frame) 내부 레이아웃 수정
+        self.conf_frame = ttk.LabelFrame(controls_container, text="Confidence Threshold", padding="5")
+        self.conf_frame.pack(fill="x", pady=(0, 4))
+
+        # (1) 값 레이블을 우측에 옮기고, 실제 버튼과 슬라이더는 conf_row 안에 배치합니다.
+        #    이 예시에서는 값 레이블을 슬라이더 옆에 표시하도록 conf_row 내부로 포함했습니다.
+        conf_row = ttk.Frame(self.conf_frame)
+        conf_row.pack(fill="x", padx=5, pady=5)
+
+        # (2) 왼쪽 "-" 버튼
+        btn_conf_minus = ttk.Button(conf_row,
+                                    text="-",
+                                    width=2,
+                                    command=lambda: self.adjust_slider(self.conf_slider, -0.01))
+        btn_conf_minus.pack(side="left")
+
+        # (3) 슬라이더 (고정 너비 300, 양옆 버튼 사이에서 expand=True)
+        self.conf_slider = ttk.Scale(conf_row,
+                                    from_=0.0, to=1.0,
+                                    orient=tk.HORIZONTAL,
+                                    length=300,
+                                    command=self.on_threshold_change)
+        self.conf_slider.set(0.5)
+        # 슬라이더가 가능한 가로 공간을 차지하도록 fill="x", expand=True 지정
+        self.conf_slider.pack(side="left", fill="x", expand=True, padx=(5, 5))
+
+        # (4) 오른쪽 "+" 버튼
+        btn_conf_plus = ttk.Button(conf_row,
+                                   text="+",
+                                   width=2,
+                                   command=lambda: self.adjust_slider(self.conf_slider, 0.01))
+        btn_conf_plus.pack(side="left")
+
+        # (5) 슬라이더 값 표시 레이블 (예: "0.50")
+        #    - 슬라이더와 + 버튼 오른쪽에 붙도록 pack(side="left", padx=(5, 0)) 지정
+        self.conf_value_label = ttk.Label(conf_row, text="0.50", width=5, anchor="e")
+        self.conf_value_label.pack(side="left", padx=(5, 0))
+
+
+        # ────────────────────────────────────────────────────────────────────────────────
+        # ▶ IoU Threshold (iou_frame) 내부 레이아웃 수정
+        self.iou_frame = ttk.LabelFrame(controls_container, text="IoU Threshold", padding="5")
+        self.iou_frame.pack(fill="x", pady=(0, 4))
+
+        iou_row = ttk.Frame(self.iou_frame)
+        iou_row.pack(fill="x", padx=5, pady=5)
+
+        # (1) 왼쪽 "-" 버튼
+        btn_iou_minus = ttk.Button(iou_row,
+                                   text="-",
+                                   width=2,
+                                   command=lambda: self.adjust_slider(self.iou_slider, -0.05))
+        btn_iou_minus.pack(side="left")
+
+        # (2) 슬라이더 (고정 너비 300, expand=True)
+        self.iou_slider = ttk.Scale(iou_row,
+                                    from_=0.0, to=1.0,
+                                    orient=tk.HORIZONTAL,
+                                    length=300,
+                                    command=self.on_threshold_change)
+        self.iou_slider.set(0.5)
+        self.iou_slider.pack(side="left", fill="x", expand=True, padx=(5, 5))
+
+        # (3) 오른쪽 "+" 버튼
+        btn_iou_plus = ttk.Button(iou_row,
+                                  text="+",
+                                  width=2,
+                                  command=lambda: self.adjust_slider(self.iou_slider, 0.05))
+        btn_iou_plus.pack(side="left")
+
+        # (4) 슬라이더 값 표시 레이블 ("0.50")
+        self.iou_value_label = ttk.Label(iou_row, text="0.50", width=5, anchor="e")
+        self.iou_value_label.pack(side="left", padx=(5, 0))
+
+        # Edit Selected Label 버튼
+        self.edit_label_button = ttk.Button(controls_container, text="Edit Selected Label",
+                                        command=self.edit_selected_label, state=tk.DISABLED)
+        self.edit_label_button.pack(fill="x", pady=(0, 2))
+
+        # Save Modified Annotations 버튼
+        self.save_button = ttk.Button(controls_container, text="Save Modified Annotations",
+                                  command=self.save_annotations, state=tk.DISABLED)
+        self.save_button.pack(fill="x")
 
     def _on_mousewheel_explorer(self, event):
         # 마우스 휠 이벤트가 explorer_canvas 영역에서 발생했는지 확인
@@ -322,6 +387,7 @@ class AnnotatorGUI:
                 canvas.yview_scroll(1, "units")
             elif event.num == 4 or event.delta > 0:  # Scroll up
                 canvas.yview_scroll(-1, "units")
+
 
     def _on_explorer_scroll(self, *args):
         # Canvas의 yview를 먼저 호출하여 스크롤을 적용
@@ -964,7 +1030,7 @@ class AnnotatorGUI:
             self.categories,
             conf_thresh,
             visible_class_ids,
-            visible_insts      # ← 추가 파라미터
+            visible_insts      
         )
 
         filtered_preds_for_map = [p for p in self.current_pred_anns if p['score'] >= conf_thresh]
@@ -974,26 +1040,8 @@ class AnnotatorGUI:
                 self.current_gt_anns, filtered_preds_for_map, self.categories, iou_thresh_map
             )
             self.map_label.config(text=f"Current Image AP (IoU={iou_thresh_map:.2f}): {mean_ap:.4f}")
-            '''
-            self.class_ap_text.config(state=tk.NORMAL)
-            self.class_ap_text.delete(1.0, tk.END)
-            if class_aps:
-                sorted_class_aps = sorted(class_aps.items(), key=lambda item: item[1], reverse=True)
-                for cat_id, ap in sorted_class_aps:
-                    cat_name = self.categories.get(cat_id, {}).get('name', f'ID:{cat_id}')
-                    self.class_ap_text.insert(tk.END, f"- {cat_name}: {ap:.4f}\n")
-            else:
-                self.class_ap_text.insert(tk.END, "No AP data available.")
-            self.class_ap_text.config(state=tk.DISABLED)
-            '''
         else:
             self.map_label.config(text=f"Current Image AP (IoU={iou_thresh_map:.2f}): N/A")
-            '''
-            self.class_ap_text.config(state=tk.NORMAL)
-            self.class_ap_text.delete(1.0, tk.END)
-            self.class_ap_text.insert(tk.END, "GT or Predictions missing for AP.")
-            self.class_ap_text.config(state=tk.DISABLED)
-            '''
 
         self.draw_pr_curve(iou_thresh_pr)
 
@@ -1455,6 +1503,40 @@ class AnnotatorGUI:
         self.update_visualization_and_map()
         self.update_status("Annotations have been reset.", 100)
 
+    def show_help(self):
+        # 팝업 창 생성
+        help_win = tk.Toplevel(self.master)
+        help_win.title("Help")
+        help_win.geometry("500x400")  # 필요에 따라 크기 조정 가능
+
+        # 아래 multiline 문자열에 도움말 내용을 그대로 복붙합니다.
+        help_text = (
+            "Directions\n"
+            "1. Click Load GT Annotations button.\n"
+            "2. Click Load Predictions button.\n"
+            "3. Click Select Image Directory button.\n"
+            "4. Choose image on the left side.\n\n"
+            "Reset Bbox Button: revert the bounding boxes you edited back to their original state.\n"
+            "Calculate Dataset mAP Button: mAP calculation for the entire image.\n"
+            "Edit Selected Label Button: change the label of the selected bounding box.\n"
+            "Save Modified Annotations Button: save the annotation in its edited state.\n\n"
+            "Class Visibility: class/instance checkbox, and AP score for each class.\n"
+            "Status And Progress Bar: Displayed in the top-right corner of the screen.\n"
+            "PR-Curve: Displayed in the bottom-right of the screen.\n\n"
+            "Confidence/IoU Threshold Slider: you can adjust the threshold using the slider at the bottom center.\n"
+            "Current Image AP, Dataset mAP: at the bottom center, you can view the AP for each image and the mAP for all images."
+        )
+
+        # 읽기 전용 Text 위젯에 텍스트 삽입
+        text_widget = tk.Text(help_win, wrap="word", padx=10, pady=10)
+        text_widget.insert("1.0", help_text)
+        text_widget.config(state="disabled")  # 사용자 편집 방지
+        text_widget.pack(fill="both", expand=True, padx=10, pady=10)
+
+        # Close 버튼
+        close_btn = ttk.Button(help_win, text="Close", command=help_win.destroy)
+        close_btn.pack(pady=(0, 10))
+
     def on_sort_change(self, event=None):
         """정렬 기준이나 방향이 변경되었을 때 호출"""
         self.sort_criterion = self.sort_var.get()
@@ -1463,6 +1545,7 @@ class AnnotatorGUI:
         if self.image_metadata:
             self._populate_explorer_view()
             self.update_status(f"Images sorted by {self.sort_criterion} ({'desc' if self.sort_descending else 'asc'})", 100)
+
 
 if __name__ == '__main__':
     root = tk.Tk()
