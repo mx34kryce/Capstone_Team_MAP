@@ -62,7 +62,10 @@ class AnnotatorGUI:
         self.item_padding = 2
         self.selected_explorer_image_id = None
         self.style = None # ttk.Style 객체를 저장할 인스턴스 변수
-
+        
+        # 정렬 관련 변수 추가
+        self.sort_criterion = "filename"  # 기본 정렬 기준
+        self.sort_descending = False  # 기본은 오름차순
 
         # UI 요소 생성
         self._create_widgets()
@@ -144,6 +147,26 @@ class AnnotatorGUI:
 
         # 이미지 목록 (캔버스 기반 탐색기 뷰로 변경)
         ttk.Label(left_frame, text="Images:").pack(anchor="w")
+        
+        # 정렬 옵션 프레임 추가
+        sort_frame = ttk.Frame(left_frame)
+        sort_frame.pack(fill="x", pady=(0, 5))
+        
+        ttk.Label(sort_frame, text="Sort by:").pack(side="left", padx=(0, 5))
+        
+        self.sort_var = tk.StringVar(value="filename")
+        sort_options = ["filename", "ap", "classes", "instances"]
+        self.sort_combobox = ttk.Combobox(sort_frame, textvariable=self.sort_var, 
+                                         values=sort_options, state="readonly", width=10)
+        self.sort_combobox.pack(side="left", padx=(0, 5))
+        self.sort_combobox.bind("<<ComboboxSelected>>", self.on_sort_change)
+        
+        self.sort_desc_var = tk.BooleanVar(value=False)
+        self.sort_desc_checkbox = ttk.Checkbutton(sort_frame, text="Desc", 
+                                                 variable=self.sort_desc_var,
+                                                 command=self.on_sort_change)
+        self.sort_desc_checkbox.pack(side="left")
+
         explorer_outer_frame = ttk.Frame(left_frame)
         explorer_outer_frame.pack(fill="both", expand=True, pady=(0, 10))
 
@@ -157,6 +180,11 @@ class AnnotatorGUI:
         self.explorer_canvas.bind('<Configure>', lambda e: self._populate_explorer_view()) # 캔버스 크기 변경 시 재구성
         # 스크롤 이벤트는 yscrollcommand를 통해 _on_explorer_scroll에서 처리되도록 할 것이므로 직접 바인딩은 제거
         # 대신, yscrollcommand가 호출될 때 _on_explorer_scroll이 트리거되도록 scrollbar의 command와 canvas의 yscrollcommand를 설정
+        
+        # 이미지 탐색기 캔버스에 마우스 휠 바인딩 추가
+        self.explorer_canvas.bind("<MouseWheel>", self._on_mousewheel_explorer) # Windows
+        self.explorer_canvas.bind("<Button-4>", self._on_mousewheel_explorer)   # Linux (scroll up)
+        self.explorer_canvas.bind("<Button-5>", self._on_mousewheel_explorer)   # Linux (scroll down)
 
         pr_curve_frame = ttk.LabelFrame(left_frame, text="Precision-Recall Curve", padding="5")
         pr_curve_frame.pack(fill="both", expand=True, pady=5)
@@ -335,6 +363,32 @@ class AnnotatorGUI:
                                   command=self.save_annotations, state=tk.DISABLED)
         self.save_button.pack(fill="x")
 
+    def _on_mousewheel_explorer(self, event):
+        # 마우스 휠 이벤트가 explorer_canvas 영역에서 발생했는지 확인
+        widget_under_mouse = event.widget
+        if widget_under_mouse == self.explorer_canvas:
+            # 스크롤 방향 결정
+            if event.num == 5 or event.delta < 0:  # Scroll down
+                self.explorer_canvas.yview_scroll(1, "units")
+            elif event.num == 4 or event.delta > 0:  # Scroll up
+                self.explorer_canvas.yview_scroll(-1, "units")
+            
+            # 스크롤 후 썸네일 캐싱 및 아이템 업데이트
+            if self.scroll_debounce_id:
+                self.master.after_cancel(self.scroll_debounce_id)
+            self.scroll_debounce_id = self.master.after_idle(self._update_explorer_view_items)
+
+    def _on_mousewheel_generic(self, event, canvas):
+        # 범용 마우스 휠 처리 함수 (클래스 가시성 캔버스용)
+        widget_under_mouse = event.widget
+        if widget_under_mouse == canvas:
+            # 스크롤 방향 결정
+            if event.num == 5 or event.delta < 0:  # Scroll down
+                canvas.yview_scroll(1, "units")
+            elif event.num == 4 or event.delta > 0:  # Scroll up
+                canvas.yview_scroll(-1, "units")
+
+
     def _on_explorer_scroll(self, *args):
         # Canvas의 yview를 먼저 호출하여 스크롤을 적용
         # 이 메서드는 scrollbar의 command나 canvas의 yscrollcommand에 직접 연결되지 않고,
@@ -381,6 +435,19 @@ class AnnotatorGUI:
             self.thumbnail_cache[image_id_str] = self.placeholder_thumbnail # 예외 발생 시 플레이스홀더 캐싱
             return self.placeholder_thumbnail
 
+    def _preload_thumbnails_in_background(self, image_ids_to_preload):
+        """백그라운드에서 썸네일을 미리 로드하여 캐싱"""
+        def preload_worker():
+            for image_id in image_ids_to_preload:
+                if str(image_id) not in self.thumbnail_cache:
+                    # 메인 스레드가 아닌 곳에서 실행되므로, 실제 로딩은 메인 스레드에서 해야 함
+                    self.master.after_idle(lambda img_id=image_id: self._load_thumbnail(str(img_id)))
+        
+        # 백그라운드 스레드 대신 after_idle을 사용하여 메인 스레드에서 비동기적으로 처리
+        for image_id in image_ids_to_preload:
+            if str(image_id) not in self.thumbnail_cache:
+                self.master.after_idle(lambda img_id=image_id: self._load_thumbnail(str(img_id)))
+
     def _update_explorer_view_items(self):
         if not self.image_dir or not self.gt_images or not self.all_image_ids_ordered:
             self.explorer_canvas.delete("all_items")
@@ -407,17 +474,16 @@ class AnnotatorGUI:
         # 한 화면에 보이는 아이템 수 + 버퍼
         num_items_in_view_approx = int(self.explorer_canvas.winfo_height() / self.item_height_in_explorer) + 1 
 
-        # 2. 렌더링/캐싱할 아이템 범위 결정 (현재 보이는 10개 + 위/아래 10개 캐싱)
-        # 실제로는 "그릴" 범위를 결정하고, _load_thumbnail이 내부적으로 캐싱함.
-        # "현재 있는 인덱스에 있는 10개" -> first_visible_idx 부터 10개
-        # "미리 위쪽 10개, 아래쪽 10개"
-        # 따라서 first_visible_idx - 10 부터 first_visible_idx + 10 + (현재 화면에 보이는 갯수) 까지 로드/그리기
+        # 2. 렌더링/캐싱할 아이템 범위 결정 (현재 보이는 영역 + 위/아래 확장된 캐싱 영역)
+        render_buffer = 10  # 현재 보이는 영역 주변에 그릴 아이템 수
+        preload_buffer = 20  # 추가로 미리 로드할 아이템 수 (캐싱용)
         
-        # 그릴 범위: 보이는 첫 아이템 기준 -10 ~ +10 + 화면에 보이는 갯수
-        # 이렇게 하면 화면에 보이는 것과 그 주변이 그려짐
-        render_buffer = 10 
         render_start_idx = max(0, first_visible_idx - render_buffer)
         render_end_idx = min(len(self.all_image_ids_ordered), first_visible_idx + num_items_in_view_approx + render_buffer)
+        
+        # 캐싱을 위한 확장된 범위
+        preload_start_idx = max(0, first_visible_idx - preload_buffer)
+        preload_end_idx = min(len(self.all_image_ids_ordered), first_visible_idx + num_items_in_view_approx + preload_buffer)
 
         # 3. 기존 아이템 정리 및 새 아이템 그리기
         current_ids_to_render = set(self.all_image_ids_ordered[i] for i in range(render_start_idx, render_end_idx))
@@ -434,8 +500,12 @@ class AnnotatorGUI:
             if item_refs.get('bg'): self.explorer_canvas.delete(item_refs['bg'])
             if item_refs.get('thumb'): self.explorer_canvas.delete(item_refs['thumb'])
             if item_refs.get('text'): self.explorer_canvas.delete(item_refs['text'])
+
+        # 4. 백그라운드 썸네일 프리로딩 (캐싱 영역)
+        preload_ids = [self.all_image_ids_ordered[i] for i in range(preload_start_idx, preload_end_idx)]
+        self._preload_thumbnails_in_background(preload_ids)
             
-        # 추가/업데이트할 아이템
+        # 5. 현재 렌더링 영역의 아이템 그리기/업데이트
         for i in range(render_start_idx, render_end_idx):
             image_id = self.all_image_ids_ordered[i]
             image_id_str = str(image_id)
@@ -991,6 +1061,20 @@ class AnnotatorGUI:
                 self._populate_visibility_checkboxes()
                 self.update_visualization_and_map()
                 
+                # threshold 변경 시 메타데이터도 다시 계산 (AP가 변경될 수 있음)
+                if self.gt_images and self.pred_annotations_all and self.categories:
+                    # 현재 이미지만 업데이트하거나, 전체 업데이트 여부를 사용자가 결정할 수 있도록 할 수 있음
+                    # 여기서는 현재 이미지의 메타데이터만 업데이트
+                    current_metadata = self._calculate_image_metadata(self.current_image_id)
+                    if current_metadata:
+                        self.image_metadata[self.current_image_id] = current_metadata
+                        # 정렬 기준이 AP인 경우 목록 재정렬
+                        if self.sort_criterion == "ap":
+                            self._populate_explorer_view()
+                        else:
+                            # AP가 아닌 경우 현재 아이템의 텍스트만 업데이트
+                            self._update_explorer_view_items()
+                
         except Exception as e:
             print(f"Error in on_threshold_change: {e}")
 
@@ -1267,10 +1351,34 @@ class AnnotatorGUI:
             sorted_gt_items = sorted(self.gt_images.items(), key=lambda item: item[1].get('file_name', str(item[0])))
             self.all_image_ids_ordered = [img_id for img_id, _ in sorted_gt_items]
         elif self.image_metadata:
-            # 메타데이터의 파일 이름으로 정렬 (AP 등 다른 기준으로 정렬하려면 여기 수정)
-            # 현재는 filename으로 정렬된 image_id 리스트를 만듦
-            sorted_meta_items = sorted(self.image_metadata.items(), key=lambda item: item[1].get("filename", str(item[0])))
-            self.all_image_ids_ordered = [img_id for img_id, _ in sorted_meta_items]
+            # 정렬 기준에 따라 정렬
+            def get_sort_key(item):
+                img_id, metadata = item
+                if self.sort_criterion == "filename":
+                    return metadata.get("filename", str(img_id)).lower()
+                elif self.sort_criterion == "ap":
+                    ap_val = metadata.get("ap", "N/A")
+                    if ap_val == "N/A":
+                        return -1 if self.sort_descending else float('inf')  # N/A를 끝으로 보냄
+                    return float(ap_val) if isinstance(ap_val, (int, float, str)) else 0.0
+                elif self.sort_criterion == "classes":
+                    return metadata.get("classes", 0)
+                elif self.sort_criterion == "instances":
+                    return metadata.get("instances", 0)
+                else:
+                    return metadata.get("filename", str(img_id)).lower()
+            
+            try:
+                sorted_meta_items = sorted(self.image_metadata.items(), 
+                                         key=get_sort_key, 
+                                         reverse=self.sort_descending)
+                self.all_image_ids_ordered = [img_id for img_id, _ in sorted_meta_items]
+            except (ValueError, TypeError) as e:
+                print(f"Sorting error: {e}, falling back to filename sort")
+                # 정렬 실패 시 파일명으로 폴백
+                sorted_meta_items = sorted(self.image_metadata.items(), 
+                                         key=lambda item: item[1].get("filename", str(item[0])).lower())
+                self.all_image_ids_ordered = [img_id for img_id, _ in sorted_meta_items]
         else:
             self.all_image_ids_ordered = []
 
@@ -1428,6 +1536,16 @@ class AnnotatorGUI:
         # Close 버튼
         close_btn = ttk.Button(help_win, text="Close", command=help_win.destroy)
         close_btn.pack(pady=(0, 10))
+
+    def on_sort_change(self, event=None):
+        """정렬 기준이나 방향이 변경되었을 때 호출"""
+        self.sort_criterion = self.sort_var.get()
+        self.sort_descending = self.sort_desc_var.get()
+        
+        if self.image_metadata:
+            self._populate_explorer_view()
+            self.update_status(f"Images sorted by {self.sort_criterion} ({'desc' if self.sort_descending else 'asc'})", 100)
+
 
 if __name__ == '__main__':
     root = tk.Tk()
